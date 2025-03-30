@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>DropVault App</title>
+    <link rel="stylesheet" type="text/css" href="{{ url_for('static', path='styles.css') }}">
+    <script type="module" src="{{ url_for('static', path='firebase-login.js') }}"></script>
+</head>
+<body>
+    <!-- Login/Signup Form -->
+    <div id="login-box" hidden="true">
+        <h2>Login / Signup</h2>
+        <input type="email" id="email" placeholder="Email"><br>
+        <input type="password" id="password" placeholder="Password"><br>
+        <button id="login">Login</button>
+        <button id="sign-up">Sign Up</button>
+    </div>
+    <!-- Sign Out Button -->
+    <button id="sign-out" hidden="true">Sign Out</button>
+    
+    <!-- User Information Display -->
+    {% if user_token %}
+        <p>Logged in as: {{ user_token.email }}</p>
+        <!-- Optionally, list subdirectories or files if present -->
+    {% else %}
+        <p>Please log in.</p>
+    {% endif %}
+    
+    <p>Error message: {{ error_message }}</p>
+</body>
+</html>
