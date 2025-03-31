@@ -141,7 +141,7 @@ async def root(request: Request):
     })
 
 @app.post("/create-directory", response_class=RedirectResponse)
-async def create_directory_route(request: Request, dirname: str = Form(...)):
+async def create_directory_route(request: Request, dirname: str = Form(...), parent_path: str = Form("/")):
     id_token_cookie = request.cookies.get("token")
     user_token = validate_firebase_token(id_token_cookie)
     
@@ -150,11 +150,22 @@ async def create_directory_route(request: Request, dirname: str = Form(...)):
     
     uid = user_token.get("uid")
     try:
-        create_directory(uid, dirname, parent_path="/")
+        create_directory(uid, dirname, parent_path=parent_path)
     except ValueError as err:
-        # Log the error; in a full app you might pass this error to the UI.
         print(err)
+    # If parent_path is not root, redirect back to the parent's directory view.
+    if parent_path != "/":
+        # Query for parent's document by path and uid
+        parent_query = firestore_db.collection("Directories") \
+            .where("user_id", "==", uid) \
+            .where("path", "==", parent_path) \
+            .limit(1) \
+            .get()
+        if parent_query:
+            parent_id = parent_query[0].id
+            return RedirectResponse(url=f"/directory/{parent_id}", status_code=status.HTTP_302_FOUND)
     return RedirectResponse(url="/", status_code=status.HTTP_302_FOUND)
+
 
 @app.post("/delete-directory", response_class=RedirectResponse)
 async def delete_directory_route(request: Request, directory_id: str = Form(...)):
@@ -178,6 +189,67 @@ async def delete_directory_route(request: Request, directory_id: str = Form(...)
     
     dir_ref.delete()
     return RedirectResponse(url="/", status_code=status.HTTP_302_FOUND)
+
+@app.get("/directory/{directory_id}", response_class=HTMLResponse)
+async def change_directory(request: Request, directory_id: str):
+    id_token_cookie = request.cookies.get("token")
+    error_message = None
+    user_token = validate_firebase_token(id_token_cookie)
+    if not user_token:
+        return RedirectResponse(url="/", status_code=status.HTTP_302_FOUND)
+    
+    uid = user_token.get("uid")
+    # Retrieve the current directory document
+    dir_ref = firestore_db.collection("Directories").document(directory_id)
+    dir_doc = dir_ref.get()
+    if not dir_doc.exists:
+        error_message = "Directory not found."
+        return RedirectResponse(url="/", status_code=status.HTTP_302_FOUND)
+    
+    current_dir = dir_doc.to_dict()
+    if current_dir.get("user_id") != uid:
+        error_message = "Unauthorized access."
+        return RedirectResponse(url="/", status_code=status.HTTP_302_FOUND)
+    
+    # Normalize current directory path for query: ensure it ends with "/"
+    parent_for_query = current_dir["path"]
+    if not parent_for_query.endswith("/"):
+        parent_for_query += "/"
+    
+    # Query for child directories whose parent_path equals the normalized current directory path
+    child_query = firestore_db.collection("Directories") \
+        .where("user_id", "==", uid) \
+        .where("parent_path", "==", parent_for_query) \
+        .stream()
+    child_dirs = []
+    for child in child_query:
+        c_data = child.to_dict()
+        c_data["id"] = child.id
+        child_dirs.append(c_data)
+    
+    # Determine parent's document ID for "go up" navigation
+    parent_directory = None
+    if current_dir["parent_path"] != "/":
+        # Normalize parent's path: remove trailing slash if exists
+        parent_path_norm = current_dir["parent_path"]
+        if parent_path_norm.endswith("/"):
+            parent_path_norm = parent_path_norm[:-1]
+        parent_query = firestore_db.collection("Directories") \
+            .where("user_id", "==", uid) \
+            .where("path", "==", parent_path_norm) \
+            .limit(1) \
+            .get()
+        if parent_query:
+            parent_directory = parent_query[0].id
+    
+    return templates.TemplateResponse("directory.html", {
+        "request": request,
+        "user_token": user_token,
+        "error_message": error_message,
+        "current_dir": current_dir,
+        "child_dirs": child_dirs,
+        "parent_directory": parent_directory
+    })
 
 @app.post("/signout")
 async def signout(request: Request):

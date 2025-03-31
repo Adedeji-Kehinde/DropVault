@@ -30,7 +30,8 @@
             <ul>
             {% for directory in directories %}
                 <li>
-                    {{ directory.name }} - {{ directory.path }}
+                    <!-- Clicking this link takes you to the directory view -->
+                    <a href="/directory/{{ directory.id }}">{{ directory.name }}</a> - {{ directory.path }}
                     <form action="/delete-directory" method="post" style="display:inline;">
                         <input type="hidden" name="directory_id" value="{{ directory.id }}">
                         <button type="submit">Delete</button>
@@ -38,6 +39,8 @@
                 </li>
             {% endfor %}
             </ul>
+        {% else %}
+            <p>No directories found.</p>
         {% endif %}
     {% else %}
         <p>Please log in.</p>

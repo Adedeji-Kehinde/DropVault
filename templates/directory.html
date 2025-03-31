@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Directory: {{ current_dir.name }}</title>
+    <link rel="stylesheet" type="text/css" href="{{ url_for('static', path='styles.css') }}">
+    <script type="module" src="{{ url_for('static', path='firebase-login.js') }}"></script>
+</head>
+<body>
+    <!-- Sign Out Button -->
+    <button id="sign-out" hidden="true">Sign Out</button>
+    
+    {% if user_token %}
+        <p>Logged in as: {{ user_token.email }}</p>
+        <h2>Current Directory: {{ current_dir.name }} ({{ current_dir.path }})</h2>
+        
+        <!-- Go Up Link (if not root) -->
+        {% if parent_directory %}
+            <a href="/directory/{{ parent_directory }}">Go Up</a>
+        {% endif %}
+        
+        <!-- List Child Directories -->
+        {% if child_dirs %}
+            <h3>Subdirectories:</h3>
+            <ul>
+                {% for dir in child_dirs %}
+                    <li>
+                        <a href="/directory/{{ dir.id }}">{{ dir.name }}</a> - {{ dir.path }}
+                        <form action="/delete-directory" method="post" style="display:inline;">
+                            <input type="hidden" name="directory_id" value="{{ dir.id }}">
+                            <button type="submit">Delete</button>
+                        </form>
+                    </li>
+                {% endfor %}
+            </ul>
+        {% else %}
+            <p>No subdirectories in this directory.</p>
+        {% endif %}
+        
+        <!-- Form to Create a New Subdirectory -->
+        <h3>Create Subdirectory</h3>
+        <form action="/create-directory" method="post">
+            <!-- Pass the current directory's path as parent_path -->
+            <input type="hidden" name="parent_path" value="{{ current_dir.path }}">
+            <input type="text" name="dirname" placeholder="Subdirectory name" required>
+            <button type="submit">Create Subdirectory</button>
+        </form>
+    {% else %}
+        <p>Please log in.</p>
+    {% endif %}
+    
+    <p>Error message: {{ error_message }}</p>
+</body>
+</html>
