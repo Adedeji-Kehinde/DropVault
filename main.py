@@ -1,5 +1,5 @@
 from fastapi import FastAPI, Request, Form, status, UploadFile, File
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 import google.oauth2.id_token
@@ -7,6 +7,7 @@ from google.auth.transport import requests as google_requests
 from google.cloud import firestore
 import datetime
 import local_constants
+from io import BytesIO
 
 app = FastAPI()
 
@@ -60,40 +61,20 @@ def get_user(user_token: dict):
 def create_directory(uid: str, name: str, parent_path: str = "/"):
     """
     Creates a new directory for a user.
-    
-    Args:
-        uid: User ID
-        name: Directory name
-        parent_path: Parent directory path, defaults to root
-    
-    Returns:
-        The newly created directory document reference
-    
-    Raises:
-        ValueError: If directory name is empty or if directory already exists
     """
     name = name.strip()
     if not name:
         raise ValueError("Directory name cannot be empty")
-    
-    # Ensure parent_path ends with /
     if not parent_path.endswith("/"):
         parent_path += "/"
-    
-    # Calculate the full path
     path = parent_path + name
-    
-    # Check if directory already exists for this user at the given path
     existing_dirs = firestore_db.collection("Directories") \
         .where("user_id", "==", uid) \
         .where("path", "==", path) \
         .limit(1) \
         .get()
-    
     if len(existing_dirs) > 0:
         raise ValueError(f"Directory '{name}' already exists in '{parent_path}'")
-    
-    # Create the directory document
     dir_data = {
         "name": name,
         "path": path,
@@ -109,7 +90,6 @@ async def root(request: Request):
     id_token_cookie = request.cookies.get("token")
     error_message = None
     user_token = validate_firebase_token(id_token_cookie)
-    
     if not user_token:
         return templates.TemplateResponse("main.html", {
             "request": request,
@@ -117,9 +97,7 @@ async def root(request: Request):
             "error_message": error_message,
             "directories": []
         })
-    
     uid = user_token.get("uid")
-    # Query directories that are direct children of root
     dirs_query = firestore_db.collection("Directories") \
         .where("user_id", "==", uid) \
         .where("parent_path", "==", "/") \
@@ -129,7 +107,6 @@ async def root(request: Request):
         dir_data = d.to_dict()
         dir_data["id"] = d.id
         directories.append(dir_data)
-    
     return templates.TemplateResponse("main.html", {
         "request": request,
         "user_token": user_token,
@@ -186,7 +163,6 @@ async def change_directory(request: Request, directory_id: str):
     if not user_token:
         return RedirectResponse(url="/", status_code=status.HTTP_302_FOUND)
     uid = user_token.get("uid")
-    # Retrieve the current directory document
     dir_ref = firestore_db.collection("Directories").document(directory_id)
     dir_doc = dir_ref.get()
     if not dir_doc.exists:
@@ -196,11 +172,9 @@ async def change_directory(request: Request, directory_id: str):
     if current_dir.get("user_id") != uid:
         error_message = "Unauthorized access."
         return RedirectResponse(url="/", status_code=status.HTTP_302_FOUND)
-    # Normalize current directory path for querying child directories and files
     normalized_path = current_dir["path"]
     if not normalized_path.endswith("/"):
         normalized_path += "/"
-    # Query for child directories
     child_query = firestore_db.collection("Directories") \
         .where("user_id", "==", uid) \
         .where("parent_path", "==", normalized_path) \
@@ -210,20 +184,16 @@ async def change_directory(request: Request, directory_id: str):
         c_data = child.to_dict()
         c_data["id"] = child.id
         child_dirs.append(c_data)
-    # List files from Cloud Storage in the current directory
     from google.cloud import storage
     storage_client = storage.Client()
     bucket = storage_client.bucket(local_constants.BUCKET_NAME)
     blobs = bucket.list_blobs(prefix=normalized_path)
     files = []
     for blob in blobs:
-        # Get the part after the directory prefix
         relative_name = blob.name[len(normalized_path):]
-        # Only list files that do not have an extra "/" (i.e. directly in this directory)
         if "/" in relative_name or relative_name == "":
             continue
         files.append({"name": relative_name, "full_path": blob.name})
-    # Determine parent's document ID for "../" navigation if not root
     parent_directory = None
     if current_dir["parent_path"] != "/":
         parent_path_norm = current_dir["parent_path"]
@@ -252,7 +222,6 @@ async def delete_file(request: Request, filename: str = Form(...), parent_path: 
     user_token = validate_firebase_token(id_token_cookie)
     if not user_token:
         return RedirectResponse(url="/", status_code=status.HTTP_302_FOUND)
-    # Ensure parent's path ends with "/"
     if not parent_path.endswith("/"):
         parent_path += "/"
     blob_name = parent_path + filename
@@ -262,7 +231,6 @@ async def delete_file(request: Request, filename: str = Form(...), parent_path: 
     blob = bucket.get_blob(blob_name)
     if blob is not None:
         blob.delete()
-    # Redirect back to current directory view
     if parent_path == "/":
         return RedirectResponse(url="/", status_code=status.HTTP_302_FOUND)
     else:
@@ -276,6 +244,26 @@ async def delete_file(request: Request, filename: str = Form(...), parent_path: 
             parent_id = parent_query[0].id
             return RedirectResponse(url=f"/directory/{parent_id}", status_code=status.HTTP_302_FOUND)
         return RedirectResponse(url="/", status_code=status.HTTP_302_FOUND)
+
+@app.get("/download-file", response_class=StreamingResponse)
+async def download_file(request: Request, filename: str, parent_path: str):
+    id_token_cookie = request.cookies.get("token")
+    user_token = validate_firebase_token(id_token_cookie)
+    if not user_token:
+        return RedirectResponse(url="/", status_code=status.HTTP_302_FOUND)
+    if not parent_path.endswith("/"):
+        parent_path += "/"
+    blob_name = parent_path + filename
+    from google.cloud import storage
+    storage_client = storage.Client()
+    bucket = storage_client.bucket(local_constants.BUCKET_NAME)
+    blob = bucket.get_blob(blob_name)
+    if not blob:
+        return RedirectResponse(url="/", status_code=status.HTTP_302_FOUND)
+    file_data = blob.download_as_bytes()
+    file_stream = BytesIO(file_data)
+    headers = {"Content-Disposition": f"attachment; filename={filename}"}
+    return StreamingResponse(file_stream, media_type=blob.content_type, headers=headers)
 
 @app.post("/upload-file", response_class=HTMLResponse)
 async def upload_file(
@@ -307,7 +295,6 @@ async def upload_file(
         if parent_query:
             current_dir = parent_query[0].to_dict()
             current_dir["id"] = parent_query[0].id
-        # Query for child directories
         child_query = firestore_db.collection("Directories") \
             .where("user_id", "==", uid) \
             .where("parent_path", "==", parent_path) \

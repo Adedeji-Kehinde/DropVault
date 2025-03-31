@@ -39,7 +39,7 @@
             <p>No subdirectories in this directory.</p>
         {% endif %}
         
-        <!-- List Files in the Current Directory -->
+        <!-- List Files -->
         {% if files %}
             <h3>Files:</h3>
             <ul>
@@ -51,6 +51,7 @@
                             <input type="hidden" name="parent_path" value="{{ current_dir.path }}">
                             <button type="submit">Delete</button>
                         </form>
+                        <a href="/download-file?filename={{ file.name }}&parent_path={{ current_dir.path }}">Download</a>
                     </li>
                 {% endfor %}
             </ul>
