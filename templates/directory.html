@@ -14,9 +14,13 @@
         <p>Logged in as: {{ user_token.email }}</p>
         <h2>Current Directory: {{ current_dir.name }} ({{ current_dir.path }})</h2>
         
-        <!-- Go Up Link (if not root) -->
-        {% if parent_directory %}
-            <a href="/directory/{{ parent_directory }}">Go Up</a>
+        <!-- Special Entry for going up -->
+        {% if current_dir.parent_path != "/" %}
+            <!-- Use "../" as the special entry linking to the parent directory -->
+            <a href="/directory/{{ parent_directory }}">../</a>
+        {% else %}
+            <!-- At root, display a link to return to the main menu -->
+            <a href="/">Return to Main Menu</a>
         {% endif %}
         
         <!-- List Child Directories -->
