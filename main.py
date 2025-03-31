@@ -5,9 +5,8 @@ from fastapi.templating import Jinja2Templates
 import google.oauth2.id_token
 from google.auth.transport import requests as google_requests
 from google.cloud import firestore
-from google.cloud import storage
 import datetime
-import local_constants  # Must contain BUCKET_NAME and any other config
+import local_constants
 
 app = FastAPI()
 
@@ -102,13 +101,11 @@ def create_directory(uid: str, name: str, parent_path: str = "/"):
         "user_id": uid,
         "created_at": datetime.datetime.utcnow().isoformat()
     }
-    # Add the document to the 'Directories' collection
     doc_ref = firestore_db.collection("Directories").add(dir_data)
     return doc_ref
 
 @app.get("/", response_class=HTMLResponse)
 async def root(request: Request):
-    # Retrieve the Firebase token from cookies
     id_token_cookie = request.cookies.get("token")
     error_message = None
     user_token = validate_firebase_token(id_token_cookie)
@@ -122,8 +119,7 @@ async def root(request: Request):
         })
     
     uid = user_token.get("uid")
-    
-    # Query directories for this user that are direct children of the root (parent_path "/")
+    # Query directories that are direct children of root
     dirs_query = firestore_db.collection("Directories") \
         .where("user_id", "==", uid) \
         .where("parent_path", "==", "/") \
@@ -145,16 +141,13 @@ async def root(request: Request):
 async def create_directory_route(request: Request, dirname: str = Form(...), parent_path: str = Form("/")):
     id_token_cookie = request.cookies.get("token")
     user_token = validate_firebase_token(id_token_cookie)
-    
     if not user_token:
         return RedirectResponse(url="/", status_code=status.HTTP_302_FOUND)
-    
     uid = user_token.get("uid")
     try:
         create_directory(uid, dirname, parent_path=parent_path)
     except ValueError as err:
         print(err)
-    # If parent_path is not root, redirect back to the parent's directory view.
     if parent_path != "/":
         parent_query = firestore_db.collection("Directories") \
             .where("user_id", "==", uid) \
@@ -170,22 +163,18 @@ async def create_directory_route(request: Request, dirname: str = Form(...), par
 async def delete_directory_route(request: Request, directory_id: str = Form(...)):
     id_token_cookie = request.cookies.get("token")
     user_token = validate_firebase_token(id_token_cookie)
-    
     if not user_token:
         return RedirectResponse(url="/", status_code=status.HTTP_302_FOUND)
-    
     uid = user_token.get("uid")
     dir_ref = firestore_db.collection("Directories").document(directory_id)
     dir_doc = dir_ref.get()
     if not dir_doc.exists:
         print("Directory not found")
         return RedirectResponse(url="/", status_code=status.HTTP_302_FOUND)
-    
     dir_data = dir_doc.to_dict()
     if dir_data.get("user_id") != uid:
         print("Unauthorized deletion attempt")
         return RedirectResponse(url="/", status_code=status.HTTP_302_FOUND)
-    
     dir_ref.delete()
     return RedirectResponse(url="/", status_code=status.HTTP_302_FOUND)
 
@@ -196,7 +185,6 @@ async def change_directory(request: Request, directory_id: str):
     user_token = validate_firebase_token(id_token_cookie)
     if not user_token:
         return RedirectResponse(url="/", status_code=status.HTTP_302_FOUND)
-    
     uid = user_token.get("uid")
     # Retrieve the current directory document
     dir_ref = firestore_db.collection("Directories").document(directory_id)
@@ -204,18 +192,15 @@ async def change_directory(request: Request, directory_id: str):
     if not dir_doc.exists:
         error_message = "Directory not found."
         return RedirectResponse(url="/", status_code=status.HTTP_302_FOUND)
-    
     current_dir = dir_doc.to_dict()
     if current_dir.get("user_id") != uid:
         error_message = "Unauthorized access."
         return RedirectResponse(url="/", status_code=status.HTTP_302_FOUND)
-    
-    # Normalize current directory path for query (ensure it ends with "/")
+    # Normalize current directory path for querying child directories and files
     normalized_path = current_dir["path"]
     if not normalized_path.endswith("/"):
         normalized_path += "/"
-    
-    # Query for child directories whose parent_path equals the normalized current directory path
+    # Query for child directories
     child_query = firestore_db.collection("Directories") \
         .where("user_id", "==", uid) \
         .where("parent_path", "==", normalized_path) \
@@ -225,11 +210,22 @@ async def change_directory(request: Request, directory_id: str):
         c_data = child.to_dict()
         c_data["id"] = child.id
         child_dirs.append(c_data)
-    
-    # Determine parent's document ID for navigation using "../" (if not root)
+    # List files from Cloud Storage in the current directory
+    from google.cloud import storage
+    storage_client = storage.Client()
+    bucket = storage_client.bucket(local_constants.BUCKET_NAME)
+    blobs = bucket.list_blobs(prefix=normalized_path)
+    files = []
+    for blob in blobs:
+        # Get the part after the directory prefix
+        relative_name = blob.name[len(normalized_path):]
+        # Only list files that do not have an extra "/" (i.e. directly in this directory)
+        if "/" in relative_name or relative_name == "":
+            continue
+        files.append({"name": relative_name, "full_path": blob.name})
+    # Determine parent's document ID for "../" navigation if not root
     parent_directory = None
     if current_dir["parent_path"] != "/":
-        # Normalize parent's path by removing trailing slash if exists
         parent_path_norm = current_dir["parent_path"]
         if parent_path_norm.endswith("/"):
             parent_path_norm = parent_path_norm[:-1]
@@ -240,15 +236,46 @@ async def change_directory(request: Request, directory_id: str):
             .get()
         if parent_query:
             parent_directory = parent_query[0].id
-    
     return templates.TemplateResponse("directory.html", {
         "request": request,
         "user_token": user_token,
         "error_message": error_message,
         "current_dir": current_dir,
         "child_dirs": child_dirs,
+        "files": files,
         "parent_directory": parent_directory
     })
+
+@app.post("/delete-file", response_class=RedirectResponse)
+async def delete_file(request: Request, filename: str = Form(...), parent_path: str = Form(...)):
+    id_token_cookie = request.cookies.get("token")
+    user_token = validate_firebase_token(id_token_cookie)
+    if not user_token:
+        return RedirectResponse(url="/", status_code=status.HTTP_302_FOUND)
+    # Ensure parent's path ends with "/"
+    if not parent_path.endswith("/"):
+        parent_path += "/"
+    blob_name = parent_path + filename
+    from google.cloud import storage
+    storage_client = storage.Client()
+    bucket = storage_client.bucket(local_constants.BUCKET_NAME)
+    blob = bucket.get_blob(blob_name)
+    if blob is not None:
+        blob.delete()
+    # Redirect back to current directory view
+    if parent_path == "/":
+        return RedirectResponse(url="/", status_code=status.HTTP_302_FOUND)
+    else:
+        uid = user_token.get("uid")
+        parent_query = firestore_db.collection("Directories") \
+            .where("user_id", "==", uid) \
+            .where("path", "==", parent_path) \
+            .limit(1) \
+            .get()
+        if parent_query:
+            parent_id = parent_query[0].id
+            return RedirectResponse(url=f"/directory/{parent_id}", status_code=status.HTTP_302_FOUND)
+        return RedirectResponse(url="/", status_code=status.HTTP_302_FOUND)
 
 @app.post("/upload-file", response_class=HTMLResponse)
 async def upload_file(
@@ -261,23 +288,16 @@ async def upload_file(
     user_token = validate_firebase_token(id_token_cookie)
     if not user_token:
         return RedirectResponse(url="/", status_code=status.HTTP_302_FOUND)
-    
-    # Ensure parent's path ends with "/"
     if not parent_path.endswith("/"):
         parent_path += "/"
     blob_name = parent_path + file.filename
     overwrite_flag = (overwrite == "true")
-    
-    # Initialize Cloud Storage client using google-cloud-storage
     from google.cloud import storage
     storage_client = storage.Client()
     bucket = storage_client.bucket(local_constants.BUCKET_NAME)
     blob = bucket.get_blob(blob_name)
-    
     if blob is not None and not overwrite_flag:
-        # File exists and user did not opt to overwrite.
         uid = user_token.get("uid")
-        # Query for the current directory document using parent_path
         parent_query = firestore_db.collection("Directories") \
             .where("user_id", "==", uid) \
             .where("path", "==", parent_path) \
@@ -287,7 +307,7 @@ async def upload_file(
         if parent_query:
             current_dir = parent_query[0].to_dict()
             current_dir["id"] = parent_query[0].id
-        # Query for child directories for the current directory
+        # Query for child directories
         child_query = firestore_db.collection("Directories") \
             .where("user_id", "==", uid) \
             .where("parent_path", "==", parent_path) \
@@ -300,17 +320,14 @@ async def upload_file(
         return templates.TemplateResponse("directory.html", {
             "request": request,
             "user_token": user_token,
-            "error_message": f"File '{file.filename}' already exists in '{parent_path}'. Would you like to overwrite the file? Check 'Overwrite' to replace it.",
+            "error_message": f"File '{file.filename}' already exists in '{parent_path}'. Check 'Overwrite' to replace it.",
             "current_dir": current_dir,
             "child_dirs": child_dirs,
-            "parent_directory": None # No parent directory for root
+            "files": [],
+            "parent_directory": None
         })
-    
-    # Upload (or overwrite) the file
     new_blob = bucket.blob(blob_name)
     new_blob.upload_from_file(file.file, content_type=file.content_type)
-    
-    # Redirect back to the current directory view.
     if parent_path == "/":
         return RedirectResponse(url="/", status_code=status.HTTP_302_FOUND)
     else:
@@ -337,10 +354,8 @@ async def update_form(request: Request):
     user_token = validate_firebase_token(id_token_cookie)
     if not user_token:
         return RedirectResponse("/")
-    
     user_ref = get_user(user_token)
     user_info = user_ref.get().to_dict() if user_ref else None
-    
     return templates.TemplateResponse("update.html", {
         "request": request,
         "user_token": user_token,
@@ -354,7 +369,6 @@ async def update_form_post(request: Request, name: str = Form(...), age: int = F
     user_token = validate_firebase_token(id_token_cookie)
     if not user_token:
         return RedirectResponse("/")
-    
     user_ref = get_user(user_token)
     user_ref.update({"name": name, "age": age})
     return RedirectResponse("/", status_code=status.HTTP_302_FOUND)

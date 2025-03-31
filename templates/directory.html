@@ -14,7 +14,7 @@
         <p>Logged in as: {{ user_token.email }}</p>
         <h2>Current Directory: {{ current_dir.name }} ({{ current_dir.path }})</h2>
         
-        <!-- Special up entry using "../" if not at root, else link back to main menu -->
+        <!-- Special up entry using "../" if not at root, else return to main menu -->
         {% if current_dir.parent_path != "/" %}
             <a href="/directory/{{ parent_directory }}">../</a>
         {% else %}
@@ -37,6 +37,25 @@
             </ul>
         {% else %}
             <p>No subdirectories in this directory.</p>
+        {% endif %}
+        
+        <!-- List Files in the Current Directory -->
+        {% if files %}
+            <h3>Files:</h3>
+            <ul>
+                {% for file in files %}
+                    <li>
+                        {{ file.name }}
+                        <form action="/delete-file" method="post" style="display:inline;">
+                            <input type="hidden" name="filename" value="{{ file.name }}">
+                            <input type="hidden" name="parent_path" value="{{ current_dir.path }}">
+                            <button type="submit">Delete</button>
+                        </form>
+                    </li>
+                {% endfor %}
+            </ul>
+        {% else %}
+            <p>No files in this directory.</p>
         {% endif %}
         
         <!-- Form to Create a New Subdirectory -->
