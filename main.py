@@ -5,6 +5,7 @@ from fastapi.templating import Jinja2Templates
 import google.oauth2.id_token
 from google.auth.transport import requests as google_requests
 from google.cloud import firestore
+import datetime
 
 app = FastAPI()
 
@@ -41,7 +42,7 @@ def validate_firebase_token(id_token: str):
 def get_user(user_token: dict):
     """
     Retrieves the user document from Firestore using the uid from the token.
-    If the document does not exist, create it with a default root directory.
+    If the document does not exist, create it.
     """
     uid = user_token.get("uid")
     if not uid:
@@ -49,18 +50,59 @@ def get_user(user_token: dict):
     user_ref = firestore_db.collection("users").document(uid)
     user_doc = user_ref.get()
     if not user_doc.exists:
-        # Create default user document with a default root directory.
-        default_data = {
+        user_data = {
             "email": user_token.get("email"),
-            "root_directory": {
-                "path": "/",
-                "directories": [],  # List to hold subdirectory details
-                "files": []         # List to hold file metadata
-            }
         }
-        user_ref.set(default_data)
-        return user_ref
+        user_ref.set(user_data)
     return user_ref
+
+def create_directory(uid: str, name: str, parent_path: str = "/"):
+    """
+    Creates a new directory for a user.
+    
+    Args:
+        uid: User ID
+        name: Directory name
+        parent_path: Parent directory path, defaults to root
+    
+    Returns:
+        The newly created directory document reference
+    
+    Raises:
+        ValueError: If directory name is empty or if directory already exists
+    """
+    name = name.strip()
+    if not name:
+        raise ValueError("Directory name cannot be empty")
+    
+    # Ensure parent_path ends with /
+    if not parent_path.endswith("/"):
+        parent_path += "/"
+    
+    # Calculate the full path
+    path = parent_path + name
+    
+    # Check if directory already exists for this user at the given path
+    existing_dirs = firestore_db.collection("Directories") \
+        .where("user_id", "==", uid) \
+        .where("path", "==", path) \
+        .limit(1) \
+        .get()
+    
+    if len(existing_dirs) > 0:
+        raise ValueError(f"Directory '{name}' already exists in '{parent_path}'")
+    
+    # Create the directory document
+    dir_data = {
+        "name": name,
+        "path": path,
+        "parent_path": parent_path,
+        "user_id": uid,
+        "created_at": datetime.datetime.utcnow().isoformat()
+    }
+    # Add the document to the 'Directories' collection
+    doc_ref = firestore_db.collection("Directories").add(dir_data)
+    return doc_ref
 
 @app.get("/", response_class=HTMLResponse)
 async def root(request: Request):
@@ -69,39 +111,55 @@ async def root(request: Request):
     error_message = None
     user_token = validate_firebase_token(id_token_cookie)
     
-    # If token validation fails, render the template without user info
     if not user_token:
         return templates.TemplateResponse("main.html", {
             "request": request,
             "user_token": None,
             "error_message": error_message,
-            "user_info": None
+            "directories": []
         })
     
-    # Retrieve (or create) the user document from Firestore
     user_ref = get_user(user_token)
-    user_info = user_ref.get().to_dict() if user_ref else None
+    uid = user_token.get("uid")
+    
+    # Query directories for this user that are direct children of the root (parent_path "/")
+    dirs_query = firestore_db.collection("Directories") \
+        .where("user_id", "==", uid) \
+        .where("parent_path", "==", "/") \
+        .stream()
+    directories = [d.to_dict() for d in dirs_query]
     
     return templates.TemplateResponse("main.html", {
         "request": request,
         "user_token": user_token,
         "error_message": error_message,
-        "user_info": user_info
+        "directories": directories
     })
+
+@app.post("/create-directory", response_class=RedirectResponse)
+async def create_directory_route(request: Request, dirname: str = Form(...)):
+    id_token_cookie = request.cookies.get("token")
+    user_token = validate_firebase_token(id_token_cookie)
+    
+    if not user_token:
+        return RedirectResponse(url="/", status_code=status.HTTP_302_FOUND)
+    
+    uid = user_token.get("uid")
+    try:
+        create_directory(uid, dirname, parent_path="/")
+    except ValueError as err:
+        # For simplicity, we print the error and redirect; you can modify to show an error message.
+        print(err)
+    return RedirectResponse(url="/", status_code=status.HTTP_302_FOUND)
 
 @app.post("/signout")
 async def signout(request: Request):
-    """
-    Sign out the user by clearing the token cookie and redirecting to the home page.
-    The client-side firebase-login.js should also call this endpoint on sign out.
-    """
     response = RedirectResponse(url="/", status_code=status.HTTP_302_FOUND)
     response.delete_cookie("token")
     return response
 
 @app.get("/update-user", response_class=HTMLResponse)
 async def update_form(request: Request):
-    # Get token from cookies and validate it
     id_token_cookie = request.cookies.get("token")
     user_token = validate_firebase_token(id_token_cookie)
     if not user_token:

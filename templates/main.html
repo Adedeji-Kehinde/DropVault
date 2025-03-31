@@ -18,10 +18,21 @@
     <!-- Sign Out Button -->
     <button id="sign-out" hidden="true">Sign Out</button>
     
-    <!-- User Information Display -->
     {% if user_token %}
         <p>Logged in as: {{ user_token.email }}</p>
-        <!-- Optionally, list subdirectories or files if present -->
+        <h3>Create a New Directory</h3>
+        <form action="/create-directory" method="post">
+            <input type="text" name="dirname" placeholder="Directory name" required>
+            <button type="submit">Create Directory</button>
+        </form>
+        {% if directories %}
+            <h3>Your Directories:</h3>
+            <ul>
+            {% for directory in directories %}
+                <li>{{ directory.name }} - {{ directory.path }}</li>
+            {% endfor %}
+            </ul>
+        {% endif %}
     {% else %}
         <p>Please log in.</p>
     {% endif %}
