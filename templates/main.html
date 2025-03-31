@@ -29,7 +29,13 @@
             <h3>Your Directories:</h3>
             <ul>
             {% for directory in directories %}
-                <li>{{ directory.name }} - {{ directory.path }}</li>
+                <li>
+                    {{ directory.name }} - {{ directory.path }}
+                    <form action="/delete-directory" method="post" style="display:inline;">
+                        <input type="hidden" name="directory_id" value="{{ directory.id }}">
+                        <button type="submit">Delete</button>
+                    </form>
+                </li>
             {% endfor %}
             </ul>
         {% endif %}

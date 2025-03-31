@@ -127,7 +127,11 @@ async def root(request: Request):
         .where("user_id", "==", uid) \
         .where("parent_path", "==", "/") \
         .stream()
-    directories = [d.to_dict() for d in dirs_query]
+    directories = []
+    for d in dirs_query:
+        dir_data = d.to_dict()
+        dir_data["id"] = d.id
+        directories.append(dir_data)
     
     return templates.TemplateResponse("main.html", {
         "request": request,
@@ -148,8 +152,31 @@ async def create_directory_route(request: Request, dirname: str = Form(...)):
     try:
         create_directory(uid, dirname, parent_path="/")
     except ValueError as err:
-        # For simplicity, we print the error and redirect; you can modify to show an error message.
+        # Log the error; in a full app you might pass this error to the UI.
         print(err)
+    return RedirectResponse(url="/", status_code=status.HTTP_302_FOUND)
+
+@app.post("/delete-directory", response_class=RedirectResponse)
+async def delete_directory_route(request: Request, directory_id: str = Form(...)):
+    id_token_cookie = request.cookies.get("token")
+    user_token = validate_firebase_token(id_token_cookie)
+    
+    if not user_token:
+        return RedirectResponse(url="/", status_code=status.HTTP_302_FOUND)
+    
+    uid = user_token.get("uid")
+    dir_ref = firestore_db.collection("Directories").document(directory_id)
+    dir_doc = dir_ref.get()
+    if not dir_doc.exists:
+        print("Directory not found")
+        return RedirectResponse(url="/", status_code=status.HTTP_302_FOUND)
+    
+    dir_data = dir_doc.to_dict()
+    if dir_data.get("user_id") != uid:
+        print("Unauthorized deletion attempt")
+        return RedirectResponse(url="/", status_code=status.HTTP_302_FOUND)
+    
+    dir_ref.delete()
     return RedirectResponse(url="/", status_code=status.HTTP_302_FOUND)
 
 @app.post("/signout")
