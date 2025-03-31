@@ -136,24 +136,118 @@ async def create_directory_route(request: Request, dirname: str = Form(...), par
             return RedirectResponse(url=f"/directory/{parent_id}", status_code=status.HTTP_302_FOUND)
     return RedirectResponse(url="/", status_code=status.HTTP_302_FOUND)
 
-@app.post("/delete-directory", response_class=RedirectResponse)
+@app.post("/delete-directory", response_class=HTMLResponse)
 async def delete_directory_route(request: Request, directory_id: str = Form(...)):
     id_token_cookie = request.cookies.get("token")
     user_token = validate_firebase_token(id_token_cookie)
     if not user_token:
         return RedirectResponse(url="/", status_code=status.HTTP_302_FOUND)
+    
     uid = user_token.get("uid")
     dir_ref = firestore_db.collection("Directories").document(directory_id)
     dir_doc = dir_ref.get()
     if not dir_doc.exists:
-        print("Directory not found")
-        return RedirectResponse(url="/", status_code=status.HTTP_302_FOUND)
+        error_message = "Directory not found."
+        return templates.TemplateResponse("main.html", {
+            "request": request,
+            "user_token": user_token,
+            "error_message": error_message,
+            "directories": []
+        })
+    
     dir_data = dir_doc.to_dict()
     if dir_data.get("user_id") != uid:
-        print("Unauthorized deletion attempt")
-        return RedirectResponse(url="/", status_code=status.HTTP_302_FOUND)
+        error_message = "Unauthorized deletion attempt."
+        return templates.TemplateResponse("main.html", {
+            "request": request,
+            "user_token": user_token,
+            "error_message": error_message,
+            "directories": []
+        })
+    
+    # Normalize the directory path (ensure it ends with "/")
+    normalized_path = dir_data["path"]
+    if not normalized_path.endswith("/"):
+        normalized_path += "/"
+    
+    # Check for child directories under this directory
+    child_dirs = list(firestore_db.collection("Directories")
+                      .where("user_id", "==", uid)
+                      .where("parent_path", "==", normalized_path)
+                      .stream())
+    
+    # Check for files in Cloud Storage for this directory
+    from google.cloud import storage
+    storage_client = storage.Client()
+    bucket = storage_client.bucket(local_constants.BUCKET_NAME)
+    blobs = list(bucket.list_blobs(prefix=normalized_path))
+    # Filter blobs to list files directly under the current directory
+    files = []
+    for blob in blobs:
+        relative_name = blob.name[len(normalized_path):]
+        if "/" in relative_name or relative_name == "":
+            continue
+        files.append(blob)
+    
+    if child_dirs or files:
+        error_message = "Directory is not empty. Please delete its subdirectories and files first."
+        # Determine parent's document ID (for navigation)
+        parent_directory = None
+        if dir_data["parent_path"] != "/":
+            parent_path_norm = dir_data["parent_path"]
+            if parent_path_norm.endswith("/"):
+                parent_path_norm = parent_path_norm[:-1]
+            parent_query = firestore_db.collection("Directories") \
+                .where("user_id", "==", uid) \
+                .where("path", "==", parent_path_norm) \
+                .limit(1) \
+                .get()
+            if parent_query:
+                parent_directory = parent_query[0].id
+        
+        # Query child directories again for display
+        child_query = firestore_db.collection("Directories") \
+            .where("user_id", "==", uid) \
+            .where("parent_path", "==", normalized_path) \
+            .stream()
+        child_list = []
+        for child in child_query:
+            c_data = child.to_dict()
+            c_data["id"] = child.id
+            child_list.append(c_data)
+        # Prepare file list for display
+        files_list = []
+        for blob in blobs:
+            relative_name = blob.name[len(normalized_path):]
+            if "/" in relative_name or relative_name == "":
+                continue
+            files_list.append({"name": relative_name, "full_path": blob.name})
+        
+        return templates.TemplateResponse("directory.html", {
+            "request": request,
+            "user_token": user_token,
+            "error_message": error_message,
+            "current_dir": dir_data,
+            "child_dirs": child_list,
+            "files": files_list,
+            "parent_directory": parent_directory
+        })
+    
+    # If the directory is empty, delete it
     dir_ref.delete()
-    return RedirectResponse(url="/", status_code=status.HTTP_302_FOUND)
+    # Redirect: if the deleted directory is under root, return to main; otherwise, return to its parent directory view
+    if dir_data["parent_path"] == "/":
+        return RedirectResponse(url="/", status_code=status.HTTP_302_FOUND)
+    else:
+        parent_query = firestore_db.collection("Directories") \
+            .where("user_id", "==", uid) \
+            .where("path", "==", dir_data["parent_path"]) \
+            .limit(1) \
+            .get()
+        if parent_query:
+            parent_id = parent_query[0].id
+            return RedirectResponse(url=f"/directory/{parent_id}", status_code=status.HTTP_302_FOUND)
+        return RedirectResponse(url="/", status_code=status.HTTP_302_FOUND)
 
 @app.get("/directory/{directory_id}", response_class=HTMLResponse)
 async def change_directory(request: Request, directory_id: str):
