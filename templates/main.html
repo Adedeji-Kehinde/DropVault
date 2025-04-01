@@ -3,12 +3,12 @@
 <head>
     <meta charset="UTF-8">
     <title>DropVault App</title>
-    <link rel="stylesheet" type="text/css" href="{{ url_for('static', path='styles.css') }}">
+    <link rel="stylesheet" type="text/css" href="{{ url_for('static', path='style.css') }}">
     <script type="module" src="{{ url_for('static', path='firebase-login.js') }}"></script>
 </head>
 <body>
-    <!-- Login/Signup Form -->
-    <div id="login-box" hidden="true">
+    <!-- Login/Signup Box -->
+    <div id="login-box">
         <h2>Login / Signup</h2>
         <input type="email" id="email" placeholder="Email"><br>
         <input type="password" id="password" placeholder="Password"><br>
@@ -16,28 +16,28 @@
         <button id="sign-up">Sign Up</button>
     </div>
     <!-- Sign Out Button -->
-    <button id="sign-out" hidden="true">Sign Out</button>
+    <button id="sign-out">Sign Out</button>
     
     {% if user_token %}
         <p>Logged in as: {{ user_token.email }}</p>
         <h3>Create a New Directory</h3>
         <form action="/create-directory" method="post">
+            <input type="hidden" name="parent_path" value="/">
             <input type="text" name="dirname" placeholder="Directory name" required>
             <button type="submit">Create Directory</button>
         </form>
         {% if directories %}
             <h3>Your Directories:</h3>
             <ul>
-            {% for directory in directories %}
-                <li>
-                    <!-- Clicking this link takes you to the directory view -->
-                    <a href="/directory/{{ directory.id }}">{{ directory.name }}</a> - {{ directory.path }}
-                    <form action="/delete-directory" method="post" style="display:inline;">
-                        <input type="hidden" name="directory_id" value="{{ directory.id }}">
-                        <button type="submit">Delete</button>
-                    </form>
-                </li>
-            {% endfor %}
+                {% for directory in directories %}
+                    <li>
+                        <a href="/directory/{{ directory.id }}">{{ directory.name }}</a> - {{ directory.path }}
+                        <form action="/delete-directory" method="post" style="display:inline;">
+                            <input type="hidden" name="directory_id" value="{{ directory.id }}">
+                            <button type="submit">Delete</button>
+                        </form>
+                    </li>
+                {% endfor %}
             </ul>
         {% else %}
             <p>No directories found.</p>
@@ -46,6 +46,8 @@
         <p>Please log in.</p>
     {% endif %}
     
-    <p>Error message: {{ error_message }}</p>
+    {% if error_message %}
+        <p class="error-message">{{ error_message }}</p>
+    {% endif %}
 </body>
 </html>
