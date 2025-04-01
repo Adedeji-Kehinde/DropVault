@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <title>Directory: {{ current_dir.name }}</title>
-    <link rel="stylesheet" type="text/css" href="{{ url_for('static', path='styles.css') }}">
+    <link rel="stylesheet" type="text/css" href="{{ url_for('static', path='style.css') }}">
     <script type="module" src="{{ url_for('static', path='firebase-login.js') }}"></script>
 </head>
 <body>
@@ -41,22 +41,39 @@
         
         <!-- List Files -->
         {% if files %}
-        <h3>Files:</h3>
-        <ul>
-            {% for file in files %}
-                <li {% if duplicate_file is defined and file.name == duplicate_file %}class="duplicate"{% endif %}>
-                    {{ file.name }}
-                    <form action="/delete-file" method="post" style="display:inline;">
-                        <input type="hidden" name="filename" value="{{ file.name }}">
-                        <input type="hidden" name="parent_path" value="{{ current_dir.path }}">
-                        <button type="submit">Delete</button>
-                    </form>
-                    <a href="/download-file?filename={{ file.name }}&parent_path={{ current_dir.path }}">Download</a>
-                </li>
-            {% endfor %}
-        </ul>
+            <h3>Files:</h3>
+            <ul>
+                {% for file in files %}
+                    <li {% if duplicate_files_current and file.md5 in duplicate_files_current %}class="duplicate"{% endif %}>
+                        {{ file.name }}
+                        <form action="/delete-file" method="post" style="display:inline;">
+                            <input type="hidden" name="filename" value="{{ file.name }}">
+                            <input type="hidden" name="parent_path" value="{{ current_dir.path }}">
+                            <button type="submit">Delete</button>
+                        </form>
+                        <a href="/download-file?filename={{ file.name }}&parent_path={{ current_dir.path }}">Download</a>
+                    </li>
+                {% endfor %}
+            </ul>
         {% else %}
-        <p>No files in this directory.</p>
+            <p>No files in this directory.</p>
+        {% endif %}
+        
+        <!-- Duplicate Files Section in Current Directory -->
+        {% if duplicate_files_current %}
+            <h3>Duplicate Files in This Directory:</h3>
+            <ul>
+                {% for md5, files_list in duplicate_files_current.items() %}
+                    <li>
+                        <strong>MD5: {{ md5 }}</strong>
+                        <ul>
+                            {% for file in files_list %}
+                                <li>{{ file.name }} — {{ file.full_path }}</li>
+                            {% endfor %}
+                        </ul>
+                    </li>
+                {% endfor %}
+            </ul>
         {% endif %}
         
         <!-- Form to Create a New Subdirectory -->
@@ -72,8 +89,12 @@
         <form action="/upload-file" method="post" enctype="multipart/form-data">
             <input type="hidden" name="parent_path" value="{{ current_dir.path }}">
             <input type="file" name="file" required>
+            <p>Please select an action if a file with the same name exists:</p>
             <label>
-                <input type="checkbox" name="overwrite" value="true"> Overwrite if exists
+                <input type="radio" name="action" value="overwrite"> Overwrite
+            </label>
+            <label>
+                <input type="radio" name="action" value="duplicate"> Keep Both (Upload as duplicate)
             </label>
             <button type="submit">Upload File</button>
         </form>

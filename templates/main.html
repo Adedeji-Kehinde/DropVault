@@ -42,6 +42,26 @@
         {% else %}
             <p>No directories found.</p>
         {% endif %}
+        
+        <!-- Duplicate Files Section -->
+        {% if duplicate_files %}
+            <h3>Duplicate Files in Your Dropbox:</h3>
+            <ul>
+                {% for md5, files in duplicate_files.items() %}
+                    <li>
+                        <strong>MD5: {{ md5 }}</strong>
+                        <ul>
+                            {% for file in files %}
+                                <li>{{ file.name }} — {{ file.full_path }}</li>
+                            {% endfor %}
+                        </ul>
+                    </li>
+                {% endfor %}
+            </ul>
+        {% else %}
+            <p>No duplicate files found.</p>
+        {% endif %}
+        
     {% else %}
         <p>Please log in.</p>
     {% endif %}

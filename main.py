@@ -95,9 +95,12 @@ async def root(request: Request):
             "request": request,
             "user_token": None,
             "error_message": error_message,
-            "directories": []
+            "directories": [],
+            "duplicate_files": {}
         })
     uid = user_token.get("uid")
+    
+    # Query root-level directories
     dirs_query = firestore_db.collection("Directories") \
         .where("user_id", "==", uid) \
         .where("parent_path", "==", "/") \
@@ -107,12 +110,60 @@ async def root(request: Request):
         dir_data = d.to_dict()
         dir_data["id"] = d.id
         directories.append(dir_data)
+    
+    # Gather all directory prefixes for this user (including root)
+    dirs_query_all = firestore_db.collection("Directories") \
+        .where("user_id", "==", uid) \
+        .stream()
+    prefixes = set()
+    for d in dirs_query_all:
+        data = d.to_dict()
+        path = data.get("path", "")
+        if path:
+            if not path.endswith("/"):
+                path += "/"
+            prefixes.add(path)
+    prefixes.add("/")  # Include root
+    
+    # Collect all files from Cloud Storage for each prefix
+    from google.cloud import storage
+    storage_client = storage.Client()
+    bucket = storage_client.bucket(local_constants.BUCKET_NAME)
+    all_files = []
+    for prefix in prefixes:
+        blobs = bucket.list_blobs(prefix=prefix)
+        for blob in blobs:
+            blob.reload()  # Refresh blob metadata
+            relative_name = blob.name[len(prefix):]
+            # Skip if file is not directly under this prefix
+            if not relative_name or "/" in relative_name:
+                continue
+            file_info = {
+                "name": relative_name,
+                "full_path": blob.name,
+                "md5": blob.md5_hash
+            }
+            all_files.append(file_info)
+    
+    # Build a dictionary mapping MD5 hash to list of files
+    duplicates_dict = {}
+    for f in all_files:
+        md5 = f.get("md5")
+        if not md5:
+            continue
+        duplicates_dict.setdefault(md5, []).append(f)
+    
+    # Filter out non-duplicates (only keep entries with more than one file)
+    duplicate_files = {md5: files for md5, files in duplicates_dict.items() if len(files) > 1}
+    
     return templates.TemplateResponse("main.html", {
         "request": request,
         "user_token": user_token,
         "error_message": error_message,
-        "directories": directories
+        "directories": directories,
+        "duplicate_files": duplicate_files
     })
+
 
 @app.post("/create-directory", response_class=RedirectResponse)
 async def create_directory_route(request: Request, dirname: str = Form(...), parent_path: str = Form("/")):
@@ -296,15 +347,14 @@ async def change_directory(request: Request, directory_id: str):
             "full_path": blob.name,
             "md5": blob.md5_hash
         })
-    # Detect duplicates: count occurrences of each md5 hash
+    # Detect duplicates within the current directory
     md5_counts = {}
     for f in files:
         h = f.get("md5")
         if h:
             md5_counts[h] = md5_counts.get(h, 0) + 1
-    # Mark files as duplicate if count > 1
-    for f in files:
-        f["duplicate"] = (md5_counts.get(f.get("md5"), 0) > 1)
+    duplicate_files_current = {md5: [f for f in files if f.get("md5") == md5] 
+                               for md5 in md5_counts if md5_counts[md5] > 1}
     # Determine parent's document ID for "../" navigation if not root
     parent_directory = None
     if current_dir["parent_path"] != "/":
@@ -325,6 +375,7 @@ async def change_directory(request: Request, directory_id: str):
         "current_dir": current_dir,
         "child_dirs": child_dirs,
         "files": files,
+        "duplicate_files_current": duplicate_files_current,
         "parent_directory": parent_directory
     })
 
@@ -382,23 +433,25 @@ async def upload_file(
     request: Request,
     file: UploadFile = File(...),
     parent_path: str = Form(...),
-    overwrite: str = Form(None)
+    action: str = Form(None)  # Now action may be None if user didn't select anything
 ):
     id_token_cookie = request.cookies.get("token")
     user_token = validate_firebase_token(id_token_cookie)
     if not user_token:
         return RedirectResponse(url="/", status_code=status.HTTP_302_FOUND)
+    
     if not parent_path.endswith("/"):
         parent_path += "/"
-    blob_name = parent_path + file.filename
-    overwrite_flag = (overwrite == "true")
+    original_blob_name = parent_path + file.filename
     from google.cloud import storage
     storage_client = storage.Client()
     bucket = storage_client.bucket(local_constants.BUCKET_NAME)
-    blob = bucket.get_blob(blob_name)
-    if blob is not None and not overwrite_flag:
+    blob = bucket.get_blob(original_blob_name)
+    
+    # If a blob exists and no action is provided, ask user to select one
+    if blob is not None and not action:
         uid = user_token.get("uid")
-        # Retrieve current directory details
+        # Query current directory details
         parent_query = firestore_db.collection("Directories") \
             .where("user_id", "==", uid) \
             .where("path", "==", parent_path) \
@@ -409,10 +462,9 @@ async def upload_file(
             current_dir = parent_query[0].to_dict()
             current_dir["id"] = parent_query[0].id
         else:
-         trimmed = parent_path.rstrip("/")
-        fallback_name = trimmed.split("/")[-1] if trimmed else "/"
-        current_dir = {"path": parent_path, "name": fallback_name, "parent_path": "/"}
-
+            trimmed = parent_path.rstrip("/")
+            fallback_name = trimmed.split("/")[-1] if trimmed else "/"
+            current_dir = {"path": parent_path, "name": fallback_name, "parent_path": "/"}
 
         # Retrieve subdirectories for display
         child_query = firestore_db.collection("Directories") \
@@ -424,47 +476,137 @@ async def upload_file(
             c_data = child.to_dict()
             c_data["id"] = child.id
             child_dirs.append(c_data)
-
-        # Retrieve the list of files in the current directory from Cloud Storage
-        from google.cloud import storage
-        storage_client = storage.Client()
-        bucket = storage_client.bucket(local_constants.BUCKET_NAME)
-        # Ensure parent_path ends with "/" for consistency
-        normalized_path = parent_path if parent_path.endswith("/") else parent_path + "/"
-        blobs = bucket.list_blobs(prefix=normalized_path)
+        # Retrieve files list
+        blobs = bucket.list_blobs(prefix=parent_path)
         files_list = []
-        for blob in blobs:
-            relative_name = blob.name[len(normalized_path):]
+        for b in blobs:
+            relative_name = b.name[len(parent_path):]
             if "/" in relative_name or relative_name == "":
                 continue
-            files_list.append({"name": relative_name, "full_path": blob.name})
-
-        # Return the template with the duplicate file information and error message
+            files_list.append({"name": relative_name, "full_path": b.name})
+        
         return templates.TemplateResponse("directory.html", {
             "request": request,
             "user_token": user_token,
-            "error_message": f"File '{file.filename}' already exists in '{parent_path}'. Check 'Overwrite' to replace it.",
-            "duplicate_file": file.filename,  # Pass duplicate file name to highlight it in the template
+            "error_message": f"File '{file.filename}' already exists in '{parent_path}'. Please select an action.",
             "current_dir": current_dir,
             "child_dirs": child_dirs,
             "files": files_list,
-            "parent_directory": None
+            "parent_directory": None,
+            "duplicate_prompt": True  # Optional flag for UI adjustments
         })
-    new_blob = bucket.blob(blob_name)
-    new_blob.upload_from_file(file.file, content_type=file.content_type)
-    if parent_path == "/":
-        return RedirectResponse(url="/", status_code=status.HTTP_302_FOUND)
+    
+    # Process action if duplicate exists
+    if blob is not None:
+        if action == "overwrite":
+            blob = bucket.blob(original_blob_name)
+        elif action == "duplicate":
+            timestamp = datetime.datetime.utcnow().strftime("%Y%m%d%H%M%S")
+            if '.' in file.filename:
+                base, ext = file.filename.rsplit('.', 1)
+                new_filename = f"{base}_{timestamp}.{ext}"
+            else:
+                new_filename = f"{file.filename}_{timestamp}"
+            new_blob_name = parent_path + new_filename
+            blob = bucket.blob(new_blob_name)
+        else:
+            # Unrecognized action—should not happen if UI is correct.
+            uid = user_token.get("uid")
+            parent_query = firestore_db.collection("Directories") \
+                .where("user_id", "==", uid) \
+                .where("path", "==", parent_path) \
+                .limit(1) \
+                .get()
+            current_dir = {}
+            if parent_query:
+                current_dir = parent_query[0].to_dict()
+                current_dir["id"] = parent_query[0].id
+            return templates.TemplateResponse("directory.html", {
+                "request": request,
+                "user_token": user_token,
+                "error_message": "Unrecognized file upload action.",
+                "current_dir": current_dir,
+                "child_dirs": [],
+                "files": [],
+                "parent_directory": None
+            })
     else:
-        uid = user_token.get("uid")
-        parent_query = firestore_db.collection("Directories") \
-            .where("user_id", "==", uid) \
-            .where("path", "==", parent_path) \
-            .limit(1) \
-            .get()
-        if parent_query:
-            parent_id = parent_query[0].id
-            return RedirectResponse(url=f"/directory/{parent_id}", status_code=status.HTTP_302_FOUND)
+        blob = bucket.blob(original_blob_name)
+    
+    blob.upload_from_file(file.file, content_type=file.content_type)
+    uid = user_token.get("uid")
+    parent_query = firestore_db.collection("Directories") \
+        .where("user_id", "==", uid) \
+        .where("path", "==", parent_path) \
+        .limit(1) \
+        .get()
+    if parent_query:
+        parent_id = parent_query[0].id
+        return RedirectResponse(url=f"/directory/{parent_id}", status_code=status.HTTP_302_FOUND)
+    return RedirectResponse(url="/", status_code=status.HTTP_302_FOUND)
+
+    
+@app.get("/duplicates", response_class=HTMLResponse)
+async def duplicates(request: Request):
+    id_token_cookie = request.cookies.get("token")
+    user_token = validate_firebase_token(id_token_cookie)
+    if not user_token:
         return RedirectResponse(url="/", status_code=status.HTTP_302_FOUND)
+    uid = user_token.get("uid")
+    
+    # Get all directory prefixes for this user from Firestore
+    dirs_query = firestore_db.collection("Directories") \
+        .where("user_id", "==", uid) \
+        .stream()
+    prefixes = set()
+    for d in dirs_query:
+        data = d.to_dict()
+        path = data.get("path", "")
+        if path:
+            if not path.endswith("/"):
+                path += "/"
+            prefixes.add(path)
+    # Also include root explicitly
+    prefixes.add("/")
+    
+    # Collect all files from Cloud Storage for these prefixes
+    from google.cloud import storage
+    storage_client = storage.Client()
+    bucket = storage_client.bucket(local_constants.BUCKET_NAME)
+    all_files = []
+    for prefix in prefixes:
+        blobs = bucket.list_blobs(prefix=prefix)
+        for blob in blobs:
+            blob.reload()  # Force reload of the blob properties
+            # Extract relative file name from the prefix
+            relative_name = blob.name[len(prefix):]
+            if not relative_name or "/" in relative_name:
+                continue
+            file_info = {
+                "name": relative_name,
+                "full_path": blob.name,
+                "md5": blob.md5_hash
+            }
+            all_files.append(file_info)
+    
+    # Build a dictionary mapping MD5 hash to list of files
+    duplicates_dict = {}
+    for f in all_files:
+        md5 = f.get("md5")
+        if not md5:
+            continue
+        duplicates_dict.setdefault(md5, []).append(f)
+    
+    # Filter to only duplicate entries (more than one file with the same MD5)
+    duplicate_files = {md5: files for md5, files in duplicates_dict.items() if len(files) > 1}
+    
+    # Render your duplicates view (or integrate into your main view)
+    return templates.TemplateResponse("duplicates.html", {
+        "request": request,
+        "user_token": user_token,
+        "duplicate_files": duplicate_files
+    })
+
 
 @app.post("/signout")
 async def signout(request: Request):
