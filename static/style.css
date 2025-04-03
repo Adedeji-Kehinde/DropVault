@@ -1,98 +1,73 @@
-/* General Styles */
 body {
     font-family: Arial, sans-serif;
+    background-color: #f9f9f9;
     margin: 0;
-    padding: 20px;
-    background-color: #f5f5f5;
-    color: #333;
-}
-
-h2, h3 {
-    color: #333;
-}
-
-p {
-    line-height: 1.6;
-}
-
-/* Link Styles */
-a {
-    text-decoration: none;
-    color: #0066cc;
-}
-
-a:hover {
-    text-decoration: underline;
-}
-
-/* Button Styles */
-button {
-    padding: 6px 12px;
-    margin: 5px;
+    padding: 0;
+  }
+  
+  header {
+    background-color: #007BFF;
+    color: #fff;
+    padding: 1em;
+    text-align: center;
+  }
+  
+  main {
+    padding: 2em;
+    max-width: 800px;
+    margin: 0 auto;
+  }
+  
+  section {
+    background-color: #fff;
+    border: 1px solid #ddd;
+    padding: 1em;
+    margin-bottom: 1em;
+    border-radius: 4px;
+  }
+  
+  input[type="text"],
+  input[type="email"],
+  input[type="password"] {
+    padding: 0.5em;
+    margin-bottom: 0.5em;
+    width: 100%;
+    box-sizing: border-box;
+  }
+  
+  button {
+    padding: 0.5em 1em;
+    margin-right: 0.5em;
     border: none;
-    background-color: #0066cc;
+    background-color: #007BFF;
     color: #fff;
     cursor: pointer;
-    border-radius: 3px;
-}
+    border-radius: 4px;
+  }
+  
+  button:hover {
+    background-color: #0056b3;
+  }
+  
+  ul {
+    list-style: none;
+    padding: 0;
+  }
+  
+  li {
+    padding: 0.5em;
+    border-bottom: 1px solid #ddd;
+  }
 
-button:hover {
-    background-color: #004a99;
-}
-
-/* Form Styles */
-form {
-    margin: 10px 0;
-}
-
-input[type="text"],
-input[type="email"],
-input[type="password"],
-input[type="file"] {
-    padding: 8px;
-    margin: 5px 0;
-    border: 1px solid #ccc;
-    border-radius: 3px;
-    width: 90%;
-}
-
-/* Login Box (for main.html) */
-#login-box {
-    background: #fff;
-    border: 1px solid #ccc;
-    padding: 20px;
-    max-width: 300px;
-    margin: 20px auto;
-    border-radius: 5px;
-}
-
-/* Duplicate File Highlight */
 .duplicate {
-    color: red;
-    font-weight: bold;
+  background-color: #f9f77b;
 }
 
-/* Directory Page Specific Styles */
-.directory-header {
-    margin-bottom: 15px;
+.duplicate-group {
+  border: 1px solid #001eff;
+  padding: 0.5em;
+  margin: 0.5em 0;
 }
-
-ul {
-    list-style-type: none;
-    padding-left: 0;
-}
-
-li {
-    margin: 8px 0;
-    padding: 8px;
-    background: #fff;
-    border: 1px solid #ddd;
-    border-radius: 3px;
-}
-
-/* Container for error messages */
 .error-message {
     color: red;
-    font-weight: bold;
-    margin-top: 15px;
-}
+  }

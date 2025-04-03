@@ -1,73 +1,153 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <title>DropVault App</title>
-    <link rel="stylesheet" type="text/css" href="{{ url_for('static', path='style.css') }}">
-    <script type="module" src="{{ url_for('static', path='firebase-login.js') }}"></script>
+  <meta charset="UTF-8">
+  <title>Cloud Storage Service - {{ current_directory.name }}</title>
+  <link rel="stylesheet" href="{{ url_for('static', path='style.css') }}">
+  <!-- Import firebase-login.js as an ES module -->
+  <script type="module" src="{{ url_for('static', path='firebase-login.js') }}"></script>
 </head>
 <body>
-    <!-- Login/Signup Box -->
-    <div id="login-box">
+  <header>
+    <h1>Cloud Storage Service</h1>
+    {% if user and current_directory.path != "/" %}
+      <nav>
+        <button id="return-menu" onclick="window.location.href='/'">Return to Main Menu</button>
+      </nav>
+    {% endif %}
+  </header>
+  <main>
+    <!-- Authentication container -->
+    <div id="auth-container">
+      <div id="login-box">
         <h2>Login / Signup</h2>
-        <input type="email" id="email" placeholder="Email"><br>
-        <input type="password" id="password" placeholder="Password"><br>
+        <input type="email" id="email" placeholder="Enter your email">
+        <input type="password" id="password" placeholder="Enter your password">
         <button id="login">Login</button>
         <button id="sign-up">Sign Up</button>
+      </div>
+      <div id="user-info">
+        <button id="sign-out">Sign Out</button>
+      </div>
     </div>
-    <!-- Sign Out Button -->
-    <button id="sign-out">Sign Out</button>
-    
-    {% if user_token %}
-        <p>Logged in as: {{ user_token.email }}</p>
+
+    {% if message %}
+      <p class="error-message">{{ message }}</p>
+    {% endif %}
+
+    {% if user %}
+      <!-- Current Directory Section -->
+      <section id="current-directory">
+        <h3>Current Directory: {{ current_directory.name }} ({{ current_directory.path }})</h3>
+        {% if current_directory.path != "/" and parent_directory %}
+          <p><a href="/directory/{{ parent_directory.id }}">../</a></p>
+        {% endif %}
+        <h4>Subdirectories:</h4>
+        <ul>
+          {% for directory in directories %}
+            <li>
+              <a href="/directory/{{ directory.id }}">{{ directory.name }}</a> - Path: {{ directory.path }}
+              <form action="/delete-directory" method="post" style="display:inline;">
+                <input type="hidden" name="directory_id" value="{{ directory.id }}">
+                <button type="submit">Delete</button>
+              </form>
+            </li>
+          {% else %}
+            <li>No subdirectories found.</li>
+          {% endfor %}
+        </ul>
+      </section>
+
+        <!-- File Upload and Files Listing Section -->
+        <section id="files-section">
+            <h3>Files in {{ current_directory.name }}</h3>
+            <form action="/upload-file" method="post" enctype="multipart/form-data">
+            <input type="file" name="file" required>
+            <div>
+                <label>
+                <input type="radio" name="action" value="overwrite"> Overwrite if exists
+                </label>
+                <label>
+                <input type="radio" name="action" value="duplicate"> Upload as duplicate
+                </label>
+            </div>
+            <input type="hidden" name="current_directory_path" value="{{ current_directory.path }}">
+            <input type="hidden" name="current_directory_id" value="{{ current_directory.id | default('') }}">
+            <button type="submit">Upload File</button>
+            </form>
+            <h4>Files:</h4>
+            <ul>
+            {% for file in files %}
+                <li class="{% if file.duplicate %}duplicate{% endif %}">
+                {{ file.name }} - Path: {{ file.path }}
+                <a href="/download-file/{{ file.id }}?current_directory_id={{ current_directory.id | default('') }}">Download</a>
+                <form action="/delete-file" method="post" style="display:inline;">
+                    <input type="hidden" name="file_id" value="{{ file.id }}">
+                    <input type="hidden" name="current_directory_id" value="{{ current_directory.id | default('') }}">
+                    <button type="submit">Delete</button>
+                </form>
+                <!-- Share File Form: only show for file owner -->
+                {% if file.user_id == user.uid %}
+                    <form action="/share-file" method="post" style="display:inline;">
+                    <input type="hidden" name="file_id" value="{{ file.id }}">
+                    <input type="hidden" name="current_directory_id" value="{{ current_directory.id | default('') }}">
+                    <input type="email" name="share_email" placeholder="Share with email" required>
+                    <button type="submit">Share</button>
+                    </form>
+                {% endif %}
+                </li>
+            {% else %}
+                <li>No files found.</li>
+            {% endfor %}
+            </ul>
+        </section>
+        
+        <!-- Shared Files Section -->
+        <section id="shared-files">
+            <h3>Files Shared With You</h3>
+            <ul>
+            {% for file in shared_files %}
+                <li>
+                {{ file.name }} - Path: {{ file.path }}
+                <a href="/download-file/{{ file.id }}?current_directory_id={{ current_directory.id | default('') }}">Download</a>
+                </li>
+            {% else %}
+                <li>No shared files found.</li>
+            {% endfor %}
+            </ul>
+        </section>
+        
+        <!-- Duplicate Files Section (Entire Dropbox) -->
+        <section id="duplicate-files">
+            <h3>Duplicate Files Across Your Dropbox</h3>
+            {% if duplicate_groups_all %}
+            {% for hash, group in duplicate_groups_all.items() %}
+                <div class="duplicate-group">
+                <h4>Duplicate: {{ group.title }}</h4>
+                <ul>
+                    {% for file in group.files %}
+                    <li>{{ file.name }} - Path: {{ file.path }}</li>
+                    {% endfor %}
+                </ul>
+                </div>
+            {% endfor %}
+            {% else %}
+            <p>No duplicate files found across your dropbox.</p>
+            {% endif %}
+        </section>
+  
+
+      <!-- Create Directory Section -->
+      <section id="create-directory">
         <h3>Create a New Directory</h3>
         <form action="/create-directory" method="post">
-            <input type="hidden" name="parent_path" value="/">
-            <input type="text" name="dirname" placeholder="Directory name" required>
-            <button type="submit">Create Directory</button>
+          <input type="text" name="directory_name" placeholder="Directory Name" required>
+          <input type="hidden" name="parent_path" value="{{ current_directory.path }}">
+          <input type="hidden" name="current_directory_id" value="{{ current_directory.id | default('') }}">
+          <button type="submit">Create Directory</button>
         </form>
-        {% if directories %}
-            <h3>Your Directories:</h3>
-            <ul>
-                {% for directory in directories %}
-                    <li>
-                        <a href="/directory/{{ directory.id }}">{{ directory.name }}</a> - {{ directory.path }}
-                        <form action="/delete-directory" method="post" style="display:inline;">
-                            <input type="hidden" name="directory_id" value="{{ directory.id }}">
-                            <button type="submit">Delete</button>
-                        </form>
-                    </li>
-                {% endfor %}
-            </ul>
-        {% else %}
-            <p>No directories found.</p>
-        {% endif %}
-        
-        <!-- Duplicate Files Section -->
-        {% if duplicate_files %}
-            <h3>Duplicate Files in Your Dropbox:</h3>
-            <ul>
-                {% for md5, files in duplicate_files.items() %}
-                    <li>
-                        <strong>MD5: {{ md5 }}</strong>
-                        <ul>
-                            {% for file in files %}
-                                <li>{{ file.name }} — {{ file.full_path }}</li>
-                            {% endfor %}
-                        </ul>
-                    </li>
-                {% endfor %}
-            </ul>
-        {% else %}
-            <p>No duplicate files found.</p>
-        {% endif %}
-        
-    {% else %}
-        <p>Please log in.</p>
+      </section>
     {% endif %}
-    
-    {% if error_message %}
-        <p class="error-message">{{ error_message }}</p>
-    {% endif %}
+  </main>
 </body>
 </html>
