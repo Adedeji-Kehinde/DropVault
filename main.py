@@ -20,7 +20,10 @@ templates = Jinja2Templates(directory="templates")
 db = firestore.Client()
 
 def verify_firebase_token(id_token: str):
-    """Verifies the Firebase ID token using google-auth."""
+    """
+    Verifies the Firebase ID token using google-auth.
+    Returns the decoded token if valid, otherwise None.
+    """
     adapter = google.auth.transport.requests.Request()
     try:
         return google.oauth2.id_token.verify_firebase_token(id_token, adapter)
@@ -36,9 +39,13 @@ def get_user(decoded_token: dict):
     user_id = decoded_token.get("uid") or decoded_token.get("sub")
     if not user_id:
         raise ValueError("No valid user id found in token.")
+    
+    # Reference to the user document in Firestore
     user_ref = db.collection("users").document(user_id)
     user_doc = user_ref.get()
+    
     if not user_doc.exists:
+        # Create new user document if it doesn't exist
         user_data = {
             "email": decoded_token.get("email"),
             "created_at": firestore.SERVER_TIMESTAMP,
@@ -46,7 +53,8 @@ def get_user(decoded_token: dict):
         }
         user_ref.set(user_data)
         print(f"User document created for {user_id}")
-        # Create default root directory.
+        
+        # Create default root directory for the user
         root_dir = {
             "user_id": user_id,
             "path": "/",
@@ -63,19 +71,24 @@ def get_user(decoded_token: dict):
         return user_data
 
 def query_files(user_id: str, directory_path: str) -> list:
-    """Returns files in a given directory for the user."""
+    """
+    Returns files in a given directory for the user.
+    """
     files = []
+    # Query Firestore for files matching user and directory path
     for doc in db.collection("files")\
                  .where("user_id", "==", user_id)\
                  .where("directory_path", "==", directory_path)\
                  .stream():
         f = doc.to_dict()
-        f["id"] = doc.id
+        f["id"] = doc.id  # Attach Firestore document id
         files.append(f)
     return files
 
 def query_all_files(user_id: str) -> list:
-    """Returns all files for the user."""
+    """
+    Returns all files for the user.
+    """
     files = []
     for doc in db.collection("files").where("user_id", "==", user_id).stream():
         f = doc.to_dict()
@@ -84,12 +97,16 @@ def query_all_files(user_id: str) -> list:
     return files
 
 def mark_duplicate_files(files: list) -> list:
-    """Marks each file with a 'duplicate' flag if its hash appears more than once."""
+    """
+    Marks each file with a 'duplicate' flag if its hash appears more than once.
+    """
     hash_counts = {}
+    # Count occurrences of each file hash
     for file in files:
         h = file.get("hash")
         if h:
             hash_counts[h] = hash_counts.get(h, 0) + 1
+    # Mark file as duplicate if count is greater than one
     for file in files:
         file["duplicate"] = hash_counts.get(file.get("hash"), 0) > 1
     return files
@@ -101,21 +118,26 @@ def group_duplicate_files(files: list) -> dict:
     Returns a dict mapping hash to {title: base_filename, files: [...] }.
     """
     groups = {}
+    # Group files by hash value
     for f in files:
         h = f.get("hash")
         if h:
             groups.setdefault(h, []).append(f)
     duplicate_groups = {}
+    # Process groups with duplicates to determine a base title
     for h, group in groups.items():
         if len(group) > 1:
             original = group[0].get("name", "Unknown")
+            # Regular expression to strip off duplicate suffixes
             match = re.match(r'^(.*?)(?:_\d+)?(\.[^.]+)?$', original)
-            base_title = match.group(1) + (match.group(2) if match.group(2) else "") if match else original
+            base_title = (match.group(1) + (match.group(2) if match.group(2) else "")) if match else original
             duplicate_groups[h] = {"title": base_title, "files": group}
     return duplicate_groups
 
 def query_shared_files(user_email: str) -> list:
-    """Returns files that have been shared with the given email."""
+    """
+    Returns files that have been shared with the given email.
+    """
     files = []
     for doc in db.collection("files").where("shared_with", "array_contains", user_email).stream():
         f = doc.to_dict()
@@ -126,10 +148,10 @@ def query_shared_files(user_email: str) -> list:
 # -------------------- Endpoints -------------------- #
 
 @app.get("/", response_class=HTMLResponse)
-async def root(request: Request, token: str = Cookie(default=""), message: str = ""):
+async def root(request: Request, token: str = Cookie(default=""), message_success: str = "", message_error: str = ""):
     """
     Root route: Sets current directory to root ("/") and queries for subdirectories,
-    files, duplicate groups (across entire dropbox), and shared files.
+    files, duplicate groups (across entire DropVault), and shared files.
     """
     user = None
     directories = []
@@ -137,13 +159,15 @@ async def root(request: Request, token: str = Cookie(default=""), message: str =
     files = []
     duplicate_groups_all = {}
     shared_files = []
+    
     if token:
         decoded = verify_firebase_token(token)
         if decoded:
             user = get_user(decoded)
             user_id = decoded.get("uid") or decoded.get("sub")
             user_email = decoded.get("email")
-            # Subdirectories under root (excluding root itself)
+            
+            # Query for subdirectories under root (excluding root itself)
             for doc in db.collection("directories")\
                           .where("user_id", "==", user_id)\
                           .where("parent_path", "==", "/")\
@@ -152,10 +176,14 @@ async def root(request: Request, token: str = Cookie(default=""), message: str =
                 if d.get("path") != "/":
                     d["id"] = doc.id
                     directories.append(d)
+            
+            # Get files in root directory and mark duplicates
             files = mark_duplicate_files(query_files(user_id, current_directory["path"]))
             all_files = mark_duplicate_files(query_all_files(user_id))
             duplicate_groups_all = group_duplicate_files(all_files)
             shared_files = query_shared_files(user_email)
+    
+    # Render template with queried data
     return templates.TemplateResponse("main.html", {
         "request": request,
         "user": user,
@@ -165,33 +193,39 @@ async def root(request: Request, token: str = Cookie(default=""), message: str =
         "files": files or [],
         "duplicate_groups_all": duplicate_groups_all or {},
         "shared_files": shared_files or [],
-        "message": message
+        "message_success": message_success,  # e.g., set to "Directory created successfully" on success
+        "message_error": message_error  
     })
 
 @app.get("/directory/{dir_id}", response_class=HTMLResponse)
-async def view_directory(dir_id: str, request: Request, token: str = Cookie(default=""), message: str = ""):
+async def view_directory(dir_id: str, request: Request, token: str = Cookie(default=""), message_success: str = "", message_error: str = ""):
     """
     View a directory: Retrieves details for the specified directory, its subdirectories,
-    parent directory (if any), files, duplicate groups (across dropbox), and shared files.
+    parent directory (if any), files, duplicate groups (across DropVault), and shared files.
     """
     if not token:
         return RedirectResponse(url="/", status_code=302)
     decoded = verify_firebase_token(token)
     if not decoded:
         return RedirectResponse(url="/", status_code=302)
+    
     user = get_user(decoded)
     user_id = decoded.get("uid") or decoded.get("sub")
     user_email = decoded.get("email")
     
+    # Retrieve the directory document by id
     dir_ref = db.collection("directories").document(dir_id)
     dir_doc = dir_ref.get()
     if not dir_doc.exists:
         return RedirectResponse(url="/", status_code=302)
+    
     current_directory = dir_doc.to_dict()
+    # Security check: ensure user is owner of the directory
     if current_directory.get("user_id") != user_id:
         return RedirectResponse(url="/", status_code=302)
     current_directory["id"] = dir_doc.id
 
+    # Query subdirectories of the current directory
     directories = []
     for doc in db.collection("directories")\
                   .where("user_id", "==", user_id)\
@@ -202,6 +236,7 @@ async def view_directory(dir_id: str, request: Request, token: str = Cookie(defa
             d["id"] = doc.id
             directories.append(d)
     
+    # Get parent directory if not in root
     parent_directory = None
     if current_directory["path"] != "/":
         for doc in db.collection("directories")\
@@ -218,6 +253,7 @@ async def view_directory(dir_id: str, request: Request, token: str = Cookie(defa
     duplicate_groups_all = group_duplicate_files(all_files)
     shared_files = query_shared_files(user_email)
 
+    # Render the main template with directory details
     return templates.TemplateResponse("main.html", {
         "request": request,
         "user": user,
@@ -227,12 +263,15 @@ async def view_directory(dir_id: str, request: Request, token: str = Cookie(defa
         "files": files,
         "duplicate_groups_all": duplicate_groups_all,
         "shared_files": shared_files,
-        "message": message
+        "message_success": message_success,  # e.g., set to "Directory created successfully" on success
+        "message_error": message_error  
     })
 
 @app.get("/logout")
 async def logout():
-    """Clears the token cookie and redirects to root."""
+    """
+    Clears the token cookie and redirects to root.
+    """
     response = RedirectResponse(url="/", status_code=302)
     response.delete_cookie("token")
     return response
@@ -248,15 +287,18 @@ async def create_directory(request: Request, token: str = Cookie(default="")):
     decoded = verify_firebase_token(token)
     if not decoded:
         return RedirectResponse(url="/", status_code=302)
+    
     user = get_user(decoded)
     user_id = decoded.get("uid") or decoded.get("sub")
     form = await request.form()
     dir_name = form.get("directory_name")
     parent_path = form.get("parent_path", "/")
     current_directory_id = form.get("current_directory_id", "")
+    redirect_url = f"/directory/{current_directory_id}" if current_directory_id and current_directory_id != "None" else "/"
     if not dir_name:
         return RedirectResponse(url="/", status_code=302)
-    # Check for duplicate directory name in the same parent.
+
+    # Check for duplicate directory name in the same parent path
     existing = list(db.collection("directories")
                     .where("user_id", "==", user_id)
                     .where("parent_path", "==", parent_path)
@@ -264,7 +306,7 @@ async def create_directory(request: Request, token: str = Cookie(default="")):
                     .stream())
     if existing:
         print("Directory already exists.")
-        return RedirectResponse(url=f"/directory/{current_directory_id}?message=Directory+already+exists", status_code=302)
+        return RedirectResponse(url=f"{redirect_url}?message_error=Directory+already+exists", status_code=302)
     new_path = "/" + dir_name if parent_path == "/" else parent_path.rstrip("/") + "/" + dir_name
     directory_data = {
         "user_id": user_id,
@@ -275,8 +317,7 @@ async def create_directory(request: Request, token: str = Cookie(default="")):
     }
     db.collection("directories").add(directory_data)
     print(f"Directory '{dir_name}' created at '{new_path}' for user {user_id}")
-    redirect_url = f"/directory/{current_directory_id}" if current_directory_id else "/"
-    return RedirectResponse(url=redirect_url, status_code=302)
+    return RedirectResponse(url=f"{redirect_url}?message_success=Directory+created+successfully", status_code=302)
 
 @app.post("/delete-directory")
 async def delete_directory(request: Request, token: str = Cookie(default="")):
@@ -285,19 +326,24 @@ async def delete_directory(request: Request, token: str = Cookie(default="")):
     """
     if not token:
         return RedirectResponse(url="/", status_code=302)
+    
     decoded = verify_firebase_token(token)
     if not decoded:
         return RedirectResponse(url="/", status_code=302)
+    
     user_id = decoded.get("uid") or decoded.get("sub")
     form = await request.form()
     directory_id = form.get("directory_id")
     if not directory_id:
         return RedirectResponse(url="/", status_code=302)
+    
     directory_ref = db.collection("directories").document(directory_id)
     dir_doc = directory_ref.get()
     if dir_doc.exists:
         directory = dir_doc.to_dict()
+        # Only allow deletion if user owns the directory and it's not the root
         if directory.get("user_id") == user_id and directory.get("path") != "/":
+            # Check if directory has subdirectories or files
             subdirs = list(db.collection("directories")
                            .where("user_id", "==", user_id)
                            .where("parent_path", "==", directory.get("path"))
@@ -308,13 +354,13 @@ async def delete_directory(request: Request, token: str = Cookie(default="")):
                          .stream())
             if subdirs or files:
                 print("Directory not empty; cannot delete.")
-                return RedirectResponse(url=f"/directory/{directory_id}?message=Directory+not+empty", status_code=302)
+                return RedirectResponse(url=f"/directory/{directory_id}?message_error=Directory+not+empty", status_code=302)
             else:
                 directory_ref.delete()
                 print(f"Directory {directory_id} deleted for user {user_id}")
         else:
             print("Unauthorized deletion attempt or default root deletion.")
-    return RedirectResponse(url="/", status_code=302)
+    return RedirectResponse(url="/?message_success=Directory+deleted+successfully", status_code=302)
 
 @app.post("/upload-file")
 async def upload_file(
@@ -323,30 +369,34 @@ async def upload_file(
     file: UploadFile = File(...),
     current_directory_path: str = Form(...),
     current_directory_id: str = Form(...),
-    action: str = Form(default="")  # Expected: "overwrite" or "duplicate"
+    action: str = Form(default="")  # Expected values: "overwrite" or "duplicate"
 ):
     """
     Uploads a file to the current directory.
-    If a file with the same name exists and no action is specified, redirects with a message.
-    If action=="overwrite", uploads to the same path.
-    If action=="duplicate", appends a timestamp to create a unique filename.
-    Saves a SHA-256 hash for duplicate detection.
+    Handles file naming based on whether to overwrite an existing file or create a duplicate.
+    Also calculates and stores a SHA-256 hash for duplicate detection.
     """
     if not token:
         return RedirectResponse(url="/", status_code=302)
+    
     decoded = verify_firebase_token(token)
     if not decoded:
         return RedirectResponse(url="/", status_code=302)
+    
     user_id = decoded.get("uid") or decoded.get("sub")
     filename = file.filename
+    
+    # Build base path for file storage
     base_path = "/" + filename if current_directory_path == "/" else current_directory_path.rstrip("/") + "/" + filename
     storage_client = storage.Client()
     bucket = storage_client.bucket(local_constants.BUCKET_NAME)
     blob = bucket.blob(base_path)
+    redirect_url = f"/directory/{current_directory_id}" if current_directory_id and current_directory_id != "None" else "/"
+    # Check if file already exists and determine action
     if blob.exists():
         if not action:
             print("File exists; no action specified.")
-            return RedirectResponse(url=f"/directory/{current_directory_id}?message=File+exists,+please+select+an+action", status_code=302)
+            return RedirectResponse(url=f"{redirect_url}?message_error=File+exists,+please+select+an+action", status_code=302)
         elif action == "overwrite":
             file_path = base_path
         elif action == "duplicate":
@@ -360,14 +410,20 @@ async def upload_file(
             filename = new_filename
         else:
             print("Unrecognized action.")
-            return RedirectResponse(url=f"/directory/{current_directory_id}?message=Please+select+overwrite+or+duplicate", status_code=302)
+            return RedirectResponse(url=f"{redirect_url}?message_error=Please+select+overwrite+or+duplicate", status_code=302)
     else:
         file_path = base_path
+    
+    # Read file contents and calculate its SHA-256 hash
     file_contents = await file.read()
     file_hash = hashlib.sha256(file_contents).hexdigest()
+    
+    # Upload file to Cloud Storage
     blob = bucket.blob(file_path)
     blob.upload_from_string(file_contents)
     print(f"File '{filename}' uploaded to '{file_path}' for user {user_id}")
+    
+    # Save file metadata to Firestore
     file_data = {
         "user_id": user_id,
         "name": filename,
@@ -378,24 +434,29 @@ async def upload_file(
         "sender_email": decoded.get("email")
     }
     db.collection("files").add(file_data)
-    return RedirectResponse(url=f"/directory/{current_directory_id}", status_code=302)
+    return RedirectResponse(url=f"{redirect_url}?message_success=File+uploaded+successfully", status_code=302)
 
 @app.post("/delete-file")
 async def delete_file(request: Request, token: str = Cookie(default="")):
     """
     Deletes a file from Cloud Storage and Firestore.
+    Only the owner is allowed to delete the file.
     """
     if not token:
         return RedirectResponse(url="/", status_code=302)
+    
     decoded = verify_firebase_token(token)
     if not decoded:
         return RedirectResponse(url="/", status_code=302)
+    
     user_id = decoded.get("uid") or decoded.get("sub")
     form = await request.form()
     file_id = form.get("file_id")
     current_directory_id = form.get("current_directory_id", "")
+    redirect_url = f"/directory/{current_directory_id}" if current_directory_id and current_directory_id != "None" else "/"
     if not file_id:
-        return RedirectResponse(url=f"/directory/{current_directory_id}" if current_directory_id else "/", status_code=302)
+        return RedirectResponse(url=f"{redirect_url}", status_code=302)
+    
     file_ref = db.collection("files").document(file_id)
     file_doc = file_ref.get()
     if file_doc.exists:
@@ -408,15 +469,10 @@ async def delete_file(request: Request, token: str = Cookie(default="")):
                 blob.delete()
             file_ref.delete()
             print(f"File '{file_data.get('name')}' deleted for user {user_id}")
-    return RedirectResponse(url=f"/directory/{current_directory_id}" if current_directory_id else "/", status_code=302)
+    return RedirectResponse(url=f"{redirect_url}?message_success=File+deleted+successfully", status_code=302)
 
 @app.post("/share-file")
 async def share_file(request: Request, token: str = Cookie(default="")):
-    """
-    Shares a file read-only with another user by updating its 'shared_with' array.
-    Only the file owner can share the file.
-    Expects form data: file_id, share_email, current_directory_id.
-    """
     if not token:
         return RedirectResponse(url="/", status_code=302)
     decoded = verify_firebase_token(token)
@@ -427,8 +483,16 @@ async def share_file(request: Request, token: str = Cookie(default="")):
     file_id = form.get("file_id")
     share_email = form.get("share_email")
     current_directory_id = form.get("current_directory_id", "")
+    redirect_url = f"/directory/{current_directory_id}" if current_directory_id and current_directory_id != "None" else "/"
     if not file_id or not share_email:
-        return RedirectResponse(url=f"/directory/{current_directory_id}" if current_directory_id else "/", status_code=302)
+        return RedirectResponse(url=f"{redirect_url}", status_code=302)
+    
+    # Check if the target user exists.
+    target_query = db.collection("users").where("email", "==", share_email).stream()
+    target_exists = any(True for _ in target_query)
+    if not target_exists:
+        return RedirectResponse(url=f"{redirect_url}?message_error=User+with+email+{share_email}+not+found", status_code=302)
+    
     file_ref = db.collection("files").document(file_id)
     file_doc = file_ref.get()
     if file_doc.exists:
@@ -439,35 +503,49 @@ async def share_file(request: Request, token: str = Cookie(default="")):
                 shared_with.append(share_email)
                 file_ref.update({"shared_with": shared_with})
                 print(f"File '{file_data.get('name')}' shared with {share_email}")
+                return RedirectResponse(url=f"{redirect_url}?message_success=File+shared+successfully", status_code=302)
+            else:
+                return RedirectResponse(url=f"{redirect_url}?message_error=File+already+shared+with+{share_email}", status_code=302)
         else:
             print("Not file owner; cannot share.")
-    return RedirectResponse(url=f"/directory/{current_directory_id}" if current_directory_id else "/", status_code=302)
+            return RedirectResponse(url=f"{redirect_url}?message_error=Unauthorized+to+share+file", status_code=302)
+    return RedirectResponse(url=f"{redirect_url}", status_code=302)
 
 @app.get("/download-file/{file_id}")
 async def download_file(file_id: str, token: str = Cookie(default=""), current_directory_id: str = None):
     """
     Downloads a file if the user is the owner or if their email is in the file's shared_with list.
+    Retrieves the file from Cloud Storage and returns it as a binary response.
     """
     if not token:
         return RedirectResponse(url="/", status_code=302)
+    
     decoded = verify_firebase_token(token)
     if not decoded:
         return RedirectResponse(url="/", status_code=302)
+    
     user_id = decoded.get("uid") or decoded.get("sub")
     user_email = decoded.get("email")
+    
     file_ref = db.collection("files").document(file_id)
     file_doc = file_ref.get()
     if not file_doc.exists:
         return RedirectResponse(url=f"/directory/{current_directory_id}" if current_directory_id else "/", status_code=302)
+    
     file_data = file_doc.to_dict()
+    # Security check: allow download if owner or if file is shared with user's email
     if file_data.get("user_id") != user_id and user_email not in file_data.get("shared_with", []):
         return RedirectResponse(url=f"/directory/{current_directory_id}" if current_directory_id else "/", status_code=302)
+    
     storage_client = storage.Client()
     bucket = storage_client.bucket(local_constants.BUCKET_NAME)
     blob = bucket.blob(file_data.get("path"))
     if not blob.exists():
         return RedirectResponse(url=f"/directory/{current_directory_id}" if current_directory_id else "/", status_code=302)
+    
     file_bytes = blob.download_as_bytes()
-    return Response(content=file_bytes,
-                    media_type="application/octet-stream",
-                    headers={"Content-Disposition": f"attachment; filename={file_data.get('name')}"})
+    return Response(
+        content=file_bytes,
+        media_type="application/octet-stream",
+        headers={"Content-Disposition": f"attachment; filename={file_data.get('name')}"}
+    )

@@ -2,24 +2,33 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
+  <!-- Dynamic title using the current directory's name -->
   <title>Drop Vault - {{ current_directory.name }}</title>
-  <!-- Bootstrap CSS -->
+  
+  <!-- Bootstrap CSS for styling -->
   <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+  
+  <!-- Custom stylesheet -->
   <link rel="stylesheet" href="{{ url_for('static', path='style.css') }}">
+  
   <!-- Import firebase-login.js as an ES module -->
   <script type="module" src="{{ url_for('static', path='firebase-login.js') }}"></script>
+  
+  <!-- Inline CSS: Consider moving these styles into an external CSS file for maintainability -->
   <style>
     body {
-      padding-top: 70px;
+      padding-top: 70px; /* Ensure content is not hidden behind fixed navbar */
     }
-    /* Remove vertical borders from table cells */
+    /* Remove vertical borders from table cells for a cleaner look */
     table.table-bordered td, table.table-bordered th {
       border-left: 0;
       border-right: 0;
     }
+    /* Highlight duplicate files with a subtle background */
     .duplicate {
       background-color: #ffdddd;
     }
+    /* Notification positioning */
     .notification {
       position: fixed;
       top: 20px;
@@ -27,10 +36,12 @@
       z-index: 1050;
       max-width: 300px;
     }
+    /* Navbar brand image styling */
     .navbar-brand img {
       height: 40px;
       margin-right: 10px;
     }
+    /* Home button styling to remove default button styles */
     .home-button {
       border: none;
       background: none;
@@ -40,6 +51,7 @@
     .home-button img {
       height: 40px;
     }
+    /* Icon sizes for file and directory types */
     .type-icon {
       height: 24px;
       width: 24px;
@@ -55,82 +67,113 @@
   <!-- Fixed Navbar -->
   <nav class="navbar navbar-expand-lg navbar-dark bg-primary fixed-top">
     <div class="d-flex align-items-center">
+      <!-- Home button that redirects to the root URL -->
       <button class="home-button" onclick="window.location.href='/'">
         <img src="{{ url_for('static', path='dropvault.png') }}" alt="Home">
       </button>
       <a class="navbar-brand" href="/">Drop Vault</a>
     </div>
     <div class="collapse navbar-collapse">
+      <!-- Sign out button visible regardless of user status -->
+      <button class="btn btn-outline-light" id="sign-out">Sign Out</button>
       {% if user %}
         <ul class="navbar-nav ml-auto">
           <li class="nav-item mr-2">
+            <!-- Greet the logged in user -->
             <span class="navbar-text text-light">Welcome, {{ user.email }}</span>
-          </li>
-          <li class="nav-item">
-            <button class="btn btn-outline-light" id="sign-out">Sign Out</button>
           </li>
         </ul>
       {% endif %}
     </div>
   </nav>
-
-  <!-- Notification Alert -->
-  {% if message %}
+  
+    <!-- Notification Alert (if a message is passed) -->
+    {% if message_success %}
     <div class="notification">
-      <div class="alert alert-danger alert-dismissible fade show" role="alert">
-        {{ message }}
+        <div class="alert alert-success alert-dismissible fade show" role="alert">
+        {{ message_success }}
         <button type="button" class="close" data-dismiss="alert" aria-label="Close">
-          <span aria-hidden="true">&times;</span>
+            <span aria-hidden="true">&times;</span>
         </button>
-      </div>
+        </div>
     </div>
-  {% endif %}
+    {% endif %}
+    {% if message_error %}
+    <div class="notification">
+        <div class="alert alert-danger alert-dismissible fade show" role="alert">
+        {{ message_error }}
+        <button type="button" class="close" data-dismiss="alert" aria-label="Close">
+            <span aria-hidden="true">&times;</span>
+        </button>
+        </div>
+    </div>
+    {% endif %}
 
   <div class="container mt-4">
-        <!-- Authentication Container (always rendered for firebase-login.js) -->
-        <div id="auth-container" class="d-flex align-items-center justify-content-center">
+    <!-- Authentication Container (always rendered for firebase-login.js) -->
+    <div id="auth-container" class="d-flex align-items-center justify-content-center">
         <div class="card w-50" id="login-box">
-            <div class="card-header text-center">
+        <div class="card-header text-center">
             <h4>Login / Signup</h4>
+        </div>
+        <div class="card-body">
+            <!-- Toast container for authentication errors -->
+            <div aria-live="polite" aria-atomic="true" style="position: fixed; top: 20px; right: 20px; z-index: 1050;">
+            <div id="authToast" class="toast" data-delay="5000" style="min-width: 250px;">
+                <div class="toast-header">
+                <strong class="mr-auto text-danger">Error</strong>
+                <small>just now</small>
+                <button type="button" class="ml-2 mb-1 close" data-dismiss="toast" aria-label="Close">
+                    <span aria-hidden="true">&times;</span>
+                </button>
+                </div>
+                <div class="toast-body" id="auth-toast-body">
+                </div>
             </div>
-            <div class="card-body">
+            </div>
             <form id="auth-form">
-                <div class="form-group">
+            <div class="form-group">
                 <input type="email" id="email" class="form-control" placeholder="Enter your email" required>
-                </div>
-                <div class="form-group">
+            </div>
+            <div class="form-group">
                 <input type="password" id="password" class="form-control" placeholder="Enter your password" required>
-                </div>
-                <div class="d-flex justify-content-around">
+            </div>
+            <div class="d-flex justify-content-around">
+                <!-- Buttons for login and signup; these trigger actions in firebase-login.js -->
                 <button type="button" id="login" class="btn btn-primary">Login</button>
                 <button type="button" id="sign-up" class="btn btn-secondary">Sign Up</button>
-                </div>
+            </div>
             </form>
-            </div>
-        </div>
-        <div class="col-md-6 d-none" id="user-info">
-        <div class="card">
-            <div class="card-header">Welcome, <span id="user-email"></span></div>
-            <div class="card-body">
-            <button type="button" id="sign-out" class="btn btn-danger">Sign Out</button>
-            </div>
         </div>
         </div>
     </div>
+      <!-- This section displays user info once logged in -->
+      <div class="col-md-6 d-none" id="user-info">
+        <div class="card">
+          <div class="card-header">Welcome, <span id="user-email"></span></div>
+          <div class="card-body">
+            <button type="button" id="sign-out" class="btn btn-danger">Sign Out</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     {% if user %}
-      <!-- Current Directory Title -->
+      <!-- Display current directory information -->
       <div class="mb-4">
         <h2>Current Directory: {{ current_directory.name }} <small>({{ current_directory.path }})</small></h2>
       </div>
 
       <!-- Action Buttons Row -->
       <div class="row mb-4">
+        <!-- Create Directory Button -->
         <div class="col-md-3">
           <button class="btn btn-success btn-block" data-toggle="modal" data-target="#createDirectoryModal">
             Create Directory
             <img src="{{ url_for('static', path='directory.png') }}" class="modal-icon" alt="Directory Icon">
           </button>
         </div>
+        <!-- Upload File Button -->
         <div class="col-md-3">
           <button class="btn btn-info btn-block" data-toggle="modal" data-target="#uploadFileModal">
             Upload File
@@ -138,23 +181,25 @@
           </button>
         </div>
         {% if current_directory.path == "/" %}
-        <div class="col-md-3">
-          <button class="btn btn-warning btn-block" data-toggle="collapse" data-target="#sharedFilesCollapse" aria-expanded="false" aria-controls="sharedFilesCollapse">
-            Shared Files
-            <img src="{{ url_for('static', path='share.png') }}" class="modal-icon" alt="Share Icon">
-          </button>
-        </div>
-        <div class="col-md-3">
-          <button class="btn btn-secondary btn-block" data-toggle="collapse" data-target="#duplicateFilesCollapse" aria-expanded="false" aria-controls="duplicateFilesCollapse">
-            Search Duplicates
-            <img src="{{ url_for('static', path='search.png') }}" class="modal-icon" alt="Search Icon">
-          </button>
-        </div>
+          <!-- Shared Files Button only on root directory -->
+          <div class="col-md-3">
+            <button class="btn btn-warning btn-block" data-toggle="collapse" data-target="#sharedFilesCollapse" aria-expanded="false" aria-controls="sharedFilesCollapse">
+              Shared Files
+              <img src="{{ url_for('static', path='share.png') }}" class="modal-icon" alt="Share Icon">
+            </button>
+          </div>
+          <!-- Search Duplicates Button only on root directory -->
+          <div class="col-md-3">
+            <button class="btn btn-secondary btn-block" data-toggle="collapse" data-target="#duplicateFilesCollapse" aria-expanded="false" aria-controls="duplicateFilesCollapse">
+              Search Duplicates
+              <img src="{{ url_for('static', path='search.png') }}" class="modal-icon" alt="Search Icon">
+            </button>
+          </div>
         {% endif %}
       </div>
 
       {% if current_directory.path == "/" %}
-        <!-- Shared Files Section (only on root) -->
+        <!-- Shared Files Section (only displayed in root directory) -->
         <div class="collapse mb-4" id="sharedFilesCollapse">
           <div class="card">
             <div class="card-header">Files Shared With You</div>
@@ -174,12 +219,11 @@
                     <tr>
                       <td>{{ file.name }}</td>
                       <td>{{ file.path }}</td>
+                      <!-- Use sender email if available; otherwise, fall back to user ID -->
                       <td>{{ file.sender_email if file.sender_email else file.user_id }}</td>
                       <td>
                         {% if file.uploaded_at %}
                           {{ file.uploaded_at.strftime("%Y-%m-%d %H:%M:%S") }}
-                        {% else %}
-                          N/A
                         {% endif %}
                       </td>
                       <td>
@@ -187,6 +231,7 @@
                       </td>
                     </tr>
                   {% else %}
+                    <!-- Fallback when no shared files are available -->
                     <tr>
                       <td colspan="5">No shared files found.</td>
                     </tr>
@@ -197,10 +242,10 @@
           </div>
         </div>
 
-        <!-- Duplicate Files Section (only on root) -->
+        <!-- Duplicate Files Section (only displayed in root directory) -->
         <div class="collapse mb-4" id="duplicateFilesCollapse">
           <div class="card">
-            <div class="card-header">Duplicate Files Across Your Dropbox</div>
+            <div class="card-header">Duplicate Files Across Your DropVault</div>
             <div class="card-body">
               {% if duplicate_groups_all %}
                 {% for hash, group in duplicate_groups_all.items() %}
@@ -214,7 +259,7 @@
                   </div>
                 {% endfor %}
               {% else %}
-                <p>No duplicate files found across your dropbox.</p>
+                <p>No duplicate files found across your DropVault.</p>
               {% endif %}
             </div>
           </div>
@@ -237,20 +282,19 @@
               </tr>
             </thead>
             <tbody>
-              {% if current_directory.path != "/" and parent_directory %}
-                <!-- Special row for "Go Up" -->
+              {% if current_directory.path != "/" %}
+                <!-- "Go Up" link for navigating to the parent directory -->
                 <tr>
                   <td>
                     <img src="{{ url_for('static', path='directory.png') }}" class="type-icon" alt="Directory">
                   </td>
-                  <td><a href="/directory/{{ parent_directory.id }}">../</a></td>
-                  <td>N/A</td>
-                  <td>N/A</td>
-                  <td>N/A</td>
-                  <td>N/A</td>
+                  <td>
+                    <a href="{% if parent_directory %}/directory/{{ parent_directory.id }}{% else %}/{% endif %}">../</a>
+                  </td>
+                  <td colspan="4"></td>
                 </tr>
               {% endif %}
-              <!-- Directories -->
+              <!-- List Directories -->
               {% for directory in directories %}
                 <tr>
                   <td>
@@ -260,12 +304,9 @@
                   <td>
                     {% if directory.created_at %}
                       {{ directory.created_at.strftime("%Y-%m-%d %H:%M:%S") }}
-                    {% else %}
-                      N/A
                     {% endif %}
                   </td>
-                  <td>N/A</td>
-                  <td>N/A</td>
+                  <td colspan="2"></td>
                   <td>
                     <form action="/delete-directory" method="post" class="mb-0">
                       <input type="hidden" name="directory_id" value="{{ directory.id }}">
@@ -274,7 +315,7 @@
                   </td>
                 </tr>
               {% endfor %}
-              <!-- Files -->
+              <!-- List Files -->
               {% for file in files %}
                 <tr {% if file.duplicate %} class="duplicate" {% endif %}>
                   <td>
@@ -284,8 +325,6 @@
                   <td>
                     {% if file.uploaded_at %}
                       {{ file.uploaded_at.strftime("%Y-%m-%d %H:%M:%S") }}
-                    {% else %}
-                      N/A
                     {% endif %}
                   </td>
                   <td>
@@ -299,8 +338,6 @@
                         <input type="email" name="share_email" class="form-control form-control-sm" placeholder="Share email" required style="width:150px; display:inline-block;">
                         <button type="submit" class="btn btn-sm btn-info">Share</button>
                       </form>
-                    {% else %}
-                      N/A
                     {% endif %}
                   </td>
                   <td>
@@ -317,7 +354,7 @@
         </div>
       </div>
 
-      <!-- Modals -->
+      <!-- Modals Section -->
       <!-- Create Directory Modal -->
       <div class="modal fade" id="createDirectoryModal" tabindex="-1" role="dialog" aria-labelledby="createDirectoryModalLabel" aria-hidden="true">
         <div class="modal-dialog" role="document">
@@ -364,6 +401,7 @@
                   <input type="file" name="file" class="form-control-file" required>
                 </div>
                 <div class="form-group">
+                  <!-- Radio buttons for file upload actions -->
                   <div class="form-check form-check-inline">
                     <input class="form-check-input" type="radio" name="action" id="upload-overwrite" value="overwrite">
                     <label class="form-check-label" for="upload-overwrite">Overwrite if exists</label>
@@ -395,5 +433,18 @@
   <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/popper.js@1.16.1/dist/umd/popper.min.js"></script>
   <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
+  
+  <!-- jQuery to handle collapse events between Shared Files and Duplicate Files sections -->
+  <script>
+    $(document).ready(function(){
+      $('#duplicateFilesCollapse').on('show.bs.collapse', function () {
+        $('#sharedFilesCollapse').collapse('hide');
+      });
+      $('#sharedFilesCollapse').on('show.bs.collapse', function () {
+        $('#duplicateFilesCollapse').collapse('hide');
+      });
+    });
+  </script>
+  
 </body>
 </html>

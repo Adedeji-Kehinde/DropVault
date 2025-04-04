@@ -1,73 +1,57 @@
+  /* Body padding to avoid overlap with fixed navbar */
 body {
-    font-family: Arial, sans-serif;
-    background-color: #f9f9f9;
-    margin: 0;
-    padding: 0;
+    padding-top: 70px;
   }
   
-  header {
-    background-color: #007BFF;
-    color: #fff;
-    padding: 1em;
-    text-align: center;
+  /* Remove vertical borders from table cells */
+  table.table-bordered td,
+  table.table-bordered th {
+    border-left: 0;
+    border-right: 0;
   }
   
-  main {
-    padding: 2em;
-    max-width: 800px;
-    margin: 0 auto;
+  /* Duplicate file highlighting */
+  .duplicate {
+    background-color: #ffdddd;
   }
   
-  section {
-    background-color: #fff;
-    border: 1px solid #ddd;
-    padding: 1em;
-    margin-bottom: 1em;
-    border-radius: 4px;
+  /* Notification styles */
+  .notification {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    z-index: 1050;
+    max-width: 300px;
   }
   
-  input[type="text"],
-  input[type="email"],
-  input[type="password"] {
-    padding: 0.5em;
-    margin-bottom: 0.5em;
-    width: 100%;
-    box-sizing: border-box;
+  /* Navbar brand image */
+  .navbar-brand img {
+    height: 40px;
+    margin-right: 10px;
   }
   
-  button {
-    padding: 0.5em 1em;
-    margin-right: 0.5em;
+  /* Home button styles */
+  .home-button {
     border: none;
-    background-color: #007BFF;
-    color: #fff;
-    cursor: pointer;
-    border-radius: 4px;
-  }
-  
-  button:hover {
-    background-color: #0056b3;
-  }
-  
-  ul {
-    list-style: none;
+    background: none;
     padding: 0;
+    margin-right: 10px;
   }
   
-  li {
-    padding: 0.5em;
-    border-bottom: 1px solid #ddd;
+  .home-button img {
+    height: 40px;
+  }
+  
+  /* Icon sizes */
+  .type-icon {
+    height: 24px;
+    width: 24px;
+  }
+  
+  .modal-icon {
+    height: 20px;
+    width: 20px;
+    margin-left: 5px;
   }
 
-.duplicate {
-  background-color: #f9f77b;
-}
-
-.duplicate-group {
-  border: 1px solid #001eff;
-  padding: 0.5em;
-  margin: 0.5em 0;
-}
-.error-message {
-    color: red;
-  }
+  

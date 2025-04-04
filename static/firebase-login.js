@@ -33,8 +33,10 @@ window.addEventListener("load", function() {
                 window.location = "/";
             })
             .catch((error) => {
-                console.log(error.code);
-                console.log(error.message);
+                console.error(error.code, error.message);
+                // Set the error message in the toast body
+                document.getElementById("auth-toast-body").innerText = error.message;
+                $('#authToast').toast('show');
             });
     });
 
@@ -52,8 +54,10 @@ window.addEventListener("load", function() {
                 window.location = "/";
             })
             .catch((error) => {
-                console.log(error.code);
-                console.log(error.message);
+                console.error(error.code, error.message);
+                // Set the error message in the toast body
+                document.getElementById("auth-toast-body").innerText = error.message;
+                $('#authToast').toast('show');
             });
     });
 
