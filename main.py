@@ -12,23 +12,21 @@ from google.cloud import firestore, storage
 
 app = FastAPI()
 
-# Configure static files and templates
+# Mount static files and configure templates
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
 # Initialize Firestore client
 db = firestore.Client()
 
-
 def verify_firebase_token(id_token: str):
-    """Verifies the Firebase ID token and returns the decoded token or None."""
+    """Verifies the Firebase ID token using google-auth."""
     adapter = google.auth.transport.requests.Request()
     try:
         return google.oauth2.id_token.verify_firebase_token(id_token, adapter)
     except Exception as e:
         print(f"Token verification error: {e}")
         return None
-
 
 def get_user(decoded_token: dict):
     """
@@ -64,7 +62,6 @@ def get_user(decoded_token: dict):
         user_data["uid"] = user_id
         return user_data
 
-
 def query_files(user_id: str, directory_path: str) -> list:
     """Returns files in a given directory for the user."""
     files = []
@@ -77,7 +74,6 @@ def query_files(user_id: str, directory_path: str) -> list:
         files.append(f)
     return files
 
-
 def query_all_files(user_id: str) -> list:
     """Returns all files for the user."""
     files = []
@@ -86,7 +82,6 @@ def query_all_files(user_id: str) -> list:
         f["id"] = doc.id
         files.append(f)
     return files
-
 
 def mark_duplicate_files(files: list) -> list:
     """Marks each file with a 'duplicate' flag if its hash appears more than once."""
@@ -99,12 +94,11 @@ def mark_duplicate_files(files: list) -> list:
         file["duplicate"] = hash_counts.get(file.get("hash"), 0) > 1
     return files
 
-
 def group_duplicate_files(files: list) -> dict:
     """
-    Groups files by hash. For groups with more than one file, extracts the base filename 
-    (removing any appended duplicate suffix) as the group title.
-    Returns a dictionary mapping hash to { title: base_filename, files: [...] }.
+    Groups files by their hash. For each group with more than one file,
+    extracts a base filename (removing any duplicate suffix) as the title.
+    Returns a dict mapping hash to {title: base_filename, files: [...] }.
     """
     groups = {}
     for f in files:
@@ -120,9 +114,8 @@ def group_duplicate_files(files: list) -> dict:
             duplicate_groups[h] = {"title": base_title, "files": group}
     return duplicate_groups
 
-
 def query_shared_files(user_email: str) -> list:
-    """Returns files that have been shared with the specified email."""
+    """Returns files that have been shared with the given email."""
     files = []
     for doc in db.collection("files").where("shared_with", "array_contains", user_email).stream():
         f = doc.to_dict()
@@ -130,25 +123,27 @@ def query_shared_files(user_email: str) -> list:
         files.append(f)
     return files
 
-
 # -------------------- Endpoints -------------------- #
 
 @app.get("/", response_class=HTMLResponse)
 async def root(request: Request, token: str = Cookie(default=""), message: str = ""):
     """
-    Root route: sets current directory to root ("/"), queries subdirectories and files,
-    detects duplicates across the entire dropbox, and retrieves files shared with the user.
+    Root route: Sets current directory to root ("/") and queries for subdirectories,
+    files, duplicate groups (across entire dropbox), and shared files.
     """
-    user = directories = files = duplicate_groups_all = shared_files = None
+    user = None
+    directories = []
     current_directory = {"id": None, "name": "root", "path": "/", "parent_path": "/"}
+    files = []
+    duplicate_groups_all = {}
+    shared_files = []
     if token:
         decoded = verify_firebase_token(token)
         if decoded:
             user = get_user(decoded)
             user_id = decoded.get("uid") or decoded.get("sub")
             user_email = decoded.get("email")
-            # Subdirectories under root (exclude root itself)
-            directories = []
+            # Subdirectories under root (excluding root itself)
             for doc in db.collection("directories")\
                           .where("user_id", "==", user_id)\
                           .where("parent_path", "==", "/")\
@@ -173,12 +168,11 @@ async def root(request: Request, token: str = Cookie(default=""), message: str =
         "message": message
     })
 
-
 @app.get("/directory/{dir_id}", response_class=HTMLResponse)
 async def view_directory(dir_id: str, request: Request, token: str = Cookie(default=""), message: str = ""):
     """
-    Retrieves and displays a directory's details including its subdirectories, files,
-    duplicate groups (across entire dropbox), and shared files.
+    View a directory: Retrieves details for the specified directory, its subdirectories,
+    parent directory (if any), files, duplicate groups (across dropbox), and shared files.
     """
     if not token:
         return RedirectResponse(url="/", status_code=302)
@@ -236,19 +230,18 @@ async def view_directory(dir_id: str, request: Request, token: str = Cookie(defa
         "message": message
     })
 
-
 @app.get("/logout")
 async def logout():
-    """Clears the token cookie and redirects to the root."""
+    """Clears the token cookie and redirects to root."""
     response = RedirectResponse(url="/", status_code=302)
     response.delete_cookie("token")
     return response
-
 
 @app.post("/create-directory")
 async def create_directory(request: Request, token: str = Cookie(default="")):
     """
     Creates a new directory under the current directory.
+    Prevents duplicate directories in the same location.
     """
     if not token:
         return RedirectResponse(url="/", status_code=302)
@@ -263,6 +256,15 @@ async def create_directory(request: Request, token: str = Cookie(default="")):
     current_directory_id = form.get("current_directory_id", "")
     if not dir_name:
         return RedirectResponse(url="/", status_code=302)
+    # Check for duplicate directory name in the same parent.
+    existing = list(db.collection("directories")
+                    .where("user_id", "==", user_id)
+                    .where("parent_path", "==", parent_path)
+                    .where("name", "==", dir_name)
+                    .stream())
+    if existing:
+        print("Directory already exists.")
+        return RedirectResponse(url=f"/directory/{current_directory_id}?message=Directory+already+exists", status_code=302)
     new_path = "/" + dir_name if parent_path == "/" else parent_path.rstrip("/") + "/" + dir_name
     directory_data = {
         "user_id": user_id,
@@ -276,11 +278,10 @@ async def create_directory(request: Request, token: str = Cookie(default="")):
     redirect_url = f"/directory/{current_directory_id}" if current_directory_id else "/"
     return RedirectResponse(url=redirect_url, status_code=302)
 
-
 @app.post("/delete-directory")
 async def delete_directory(request: Request, token: str = Cookie(default="")):
     """
-    Deletes a directory only if it is empty. If not, redirects back with a message.
+    Deletes a directory only if it is empty (no subdirectories or files) and is not the default root.
     """
     if not token:
         return RedirectResponse(url="/", status_code=302)
@@ -311,8 +312,9 @@ async def delete_directory(request: Request, token: str = Cookie(default="")):
             else:
                 directory_ref.delete()
                 print(f"Directory {directory_id} deleted for user {user_id}")
+        else:
+            print("Unauthorized deletion attempt or default root deletion.")
     return RedirectResponse(url="/", status_code=302)
-
 
 @app.post("/upload-file")
 async def upload_file(
@@ -325,10 +327,10 @@ async def upload_file(
 ):
     """
     Uploads a file to the current directory.
-    If a file with the same name exists and no action is provided, redirects with a message.
+    If a file with the same name exists and no action is specified, redirects with a message.
     If action=="overwrite", uploads to the same path.
     If action=="duplicate", appends a timestamp to create a unique filename.
-    Saves a SHA-256 hash of the file for duplicate detection.
+    Saves a SHA-256 hash for duplicate detection.
     """
     if not token:
         return RedirectResponse(url="/", status_code=302)
@@ -361,24 +363,22 @@ async def upload_file(
             return RedirectResponse(url=f"/directory/{current_directory_id}?message=Please+select+overwrite+or+duplicate", status_code=302)
     else:
         file_path = base_path
-
     file_contents = await file.read()
     file_hash = hashlib.sha256(file_contents).hexdigest()
     blob = bucket.blob(file_path)
     blob.upload_from_string(file_contents)
     print(f"File '{filename}' uploaded to '{file_path}' for user {user_id}")
-
     file_data = {
         "user_id": user_id,
         "name": filename,
         "path": file_path,
         "directory_path": current_directory_path,
         "uploaded_at": firestore.SERVER_TIMESTAMP,
-        "hash": file_hash
+        "hash": file_hash,
+        "sender_email": decoded.get("email")
     }
     db.collection("files").add(file_data)
     return RedirectResponse(url=f"/directory/{current_directory_id}", status_code=302)
-
 
 @app.post("/delete-file")
 async def delete_file(request: Request, token: str = Cookie(default="")):
@@ -410,12 +410,12 @@ async def delete_file(request: Request, token: str = Cookie(default="")):
             print(f"File '{file_data.get('name')}' deleted for user {user_id}")
     return RedirectResponse(url=f"/directory/{current_directory_id}" if current_directory_id else "/", status_code=302)
 
-
 @app.post("/share-file")
 async def share_file(request: Request, token: str = Cookie(default="")):
     """
-    Shares a file (read-only) with another user by updating its 'shared_with' array.
-    Only the owner can share the file.
+    Shares a file read-only with another user by updating its 'shared_with' array.
+    Only the file owner can share the file.
+    Expects form data: file_id, share_email, current_directory_id.
     """
     if not token:
         return RedirectResponse(url="/", status_code=302)
@@ -443,11 +443,10 @@ async def share_file(request: Request, token: str = Cookie(default="")):
             print("Not file owner; cannot share.")
     return RedirectResponse(url=f"/directory/{current_directory_id}" if current_directory_id else "/", status_code=302)
 
-
 @app.get("/download-file/{file_id}")
 async def download_file(file_id: str, token: str = Cookie(default=""), current_directory_id: str = None):
     """
-    Downloads a file if the user is either the owner or has been granted read-only access.
+    Downloads a file if the user is the owner or if their email is in the file's shared_with list.
     """
     if not token:
         return RedirectResponse(url="/", status_code=302)
